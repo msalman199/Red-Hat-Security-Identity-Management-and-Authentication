@@ -1,0 +1,308 @@
+Lab 3: Installing and Configuring IdM Replica
+Objectives
+By the end of this lab, you will be able to:
+
+Install and configure an Identity Management (IdM) replica server for high availability
+Establish replication between the primary IdM server and replica
+Verify and monitor replication status between IdM servers
+Understand the benefits of IdM replication for enterprise environments
+Troubleshoot common replication issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux system administration
+Familiarity with command-line interface
+Knowledge of DNS concepts and configuration
+Completion of previous IdM installation labs or equivalent experience
+Understanding of network connectivity and firewall concepts
+Basic knowledge of LDAP and Kerberos authentication
+Required Knowledge Areas
+Linux package management (yum/dnf)
+Network configuration and troubleshooting
+Basic understanding of directory services
+Familiarity with systemctl service management
+Lab Environment Setup
+Good News! Al Nafi provides ready-to-use Linux-based cloud machines for this lab. Simply click Start Lab and you'll have access to pre-configured virtual machines. No need to build your own VMs or worry about initial setup.
+
+Lab Infrastructure
+You will work with two machines:
+
+idm-server.example.com (Primary IdM Server - 192.168.1.10)
+idm-replica.example.com (Replica Server - 192.168.1.20)
+Both machines are running Red Hat Enterprise Linux 9 or CentOS Stream 9 with necessary network connectivity already established.
+
+Task 1: Preparing the Replica Server Environment
+Subtask 1.1: Verify System Requirements
+First, let's ensure our replica server meets all requirements for IdM installation.
+
+Connect to the replica server:
+ssh root@idm-replica.example.com
+Check system resources:
+# Verify memory (minimum 2GB recommended)
+free -h
+
+# Check disk space (minimum 10GB free)
+df -h /
+
+# Verify CPU cores
+nproc
+Update the system:
+dnf update -y
+Subtask 1.2: Configure Network and Hostname
+Set the correct hostname:
+hostnamectl set-hostname idm-replica.example.com
+Verify hostname resolution:
+# Check if hostname resolves correctly
+nslookup idm-replica.example.com
+
+# Verify reverse DNS lookup
+nslookup 192.168.1.20
+Configure /etc/hosts if DNS is not properly configured:
+echo "192.168.1.10 idm-server.example.com idm-server" >> /etc/hosts
+echo "192.168.1.20 idm-replica.example.com idm-replica" >> /etc/hosts
+Subtask 1.3: Configure Firewall Rules
+Install and start firewalld:
+dnf install -y firewalld
+systemctl enable --now firewalld
+Open required ports for IdM replica:
+# Add freeipa-ldap and freeipa-ldaps services
+firewall-cmd --permanent --add-service=freeipa-ldap
+firewall-cmd --permanent --add-service=freeipa-ldaps
+
+# Add DNS service
+firewall-cmd --permanent --add-service=dns
+
+# Add Kerberos services
+firewall-cmd --permanent --add-service=kerberos
+
+# Add HTTP and HTTPS
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+
+# Reload firewall configuration
+firewall-cmd --reload
+Verify firewall rules:
+firewall-cmd --list-all
+Task 2: Installing the IdM Replica
+Subtask 2.1: Install Required Packages
+Install IdM client packages first:
+dnf install -y ipa-client
+Install IdM server packages:
+dnf install -y ipa-server ipa-server-dns
+Verify package installation:
+rpm -qa | grep ipa-server
+Subtask 2.2: Prepare Replica Installation File
+Before installing the replica, we need to prepare a replica file from the primary server.
+
+Connect to the primary IdM server:
+ssh root@idm-server.example.com
+Authenticate as admin user:
+kinit admin
+Prepare the replica installation file:
+ipa-replica-prepare idm-replica.example.com --ip-address=192.168.1.20
+Locate the generated replica file:
+ls -la /var/lib/ipa/replica-info-idm-replica.example.com.gpg
+Copy the replica file to the replica server:
+scp /var/lib/ipa/replica-info-idm-replica.example.com.gpg root@idm-replica.example.com:/tmp/
+Subtask 2.3: Install the IdM Replica
+Return to the replica server:
+ssh root@idm-replica.example.com
+Install the replica using the prepared file:
+ipa-replica-install /tmp/replica-info-idm-replica.example.com.gpg \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --no-ntp
+Note: The installation process may take 10-15 minutes. You'll be prompted for the Directory Manager password during installation.
+
+Monitor the installation progress:
+The installer will display progress information. Key steps include:
+
+Configuring directory server
+Setting up Kerberos KDC
+Configuring Apache web server
+Setting up DNS server
+Starting services
+Subtask 2.4: Verify Replica Installation
+Check IdM services status:
+ipactl status
+Verify replica is properly joined:
+ipa-replica-conncheck --master idm-server.example.com
+Test Kerberos authentication:
+kinit admin
+klist
+Task 3: Configuring Replication Between Servers
+Subtask 3.1: Verify Replication Topology
+Check current replication topology:
+ipa topologysegment-find domain
+View replication agreements:
+ipa-replica-manage list
+Check replication status from primary server:
+ssh root@idm-server.example.com
+kinit admin
+ipa-replica-manage list
+Subtask 3.2: Configure Additional Replication Settings
+Set replication refresh interval (if needed):
+# Connect to primary server
+ssh root@idm-server.example.com
+kinit admin
+
+# Modify replication settings
+ipa-replica-manage set-renewal-master idm-server.example.com
+Configure replication cleanup:
+# Set replication cleanup interval
+ipa-replica-manage clean-ruv --force
+Subtask 3.3: Test Replication Functionality
+Create a test user on the primary server:
+ssh root@idm-server.example.com
+kinit admin
+
+# Create test user
+ipa user-add testuser --first=Test --last=User --password
+Verify user replication on replica server:
+ssh root@idm-replica.example.com
+kinit admin
+
+# Check if user exists on replica
+ipa user-show testuser
+Create a test group on replica server:
+# Still on replica server
+ipa group-add testgroup --desc="Test replication group"
+Verify group replication on primary server:
+ssh root@idm-server.example.com
+kinit admin
+
+# Check if group exists on primary
+ipa group-show testgroup
+Task 4: Verifying Replication Status
+Subtask 4.1: Monitor Replication Health
+Check replication status using built-in tools:
+# On either server
+ipa-replica-manage list -v
+View detailed replication information:
+# Check replication agreements
+ipa-csreplica-manage list
+
+# View topology segments
+ipa topologysegment-find domain --all
+Monitor replication lag:
+# Check for replication delays
+ipa-replica-manage list-ruv
+Subtask 4.2: Verify Service Availability
+Test web interface access:
+# Test primary server web interface
+curl -k https://idm-server.example.com/ipa/ui/
+
+# Test replica server web interface
+curl -k https://idm-replica.example.com/ipa/ui/
+Verify LDAP connectivity:
+# Test LDAP on primary
+ldapsearch -x -H ldap://idm-server.example.com -b "dc=example,dc=com" "(objectclass=*)" dn
+
+# Test LDAP on replica
+ldapsearch -x -H ldap://idm-replica.example.com -b "dc=example,dc=com" "(objectclass=*)" dn
+Test Kerberos functionality:
+# Test kinit on both servers
+kinit admin@EXAMPLE.COM
+klist
+Subtask 4.3: Performance and Monitoring
+Check system resources on both servers:
+# Monitor CPU and memory usage
+top -n 1
+
+# Check disk I/O
+iostat -x 1 3
+
+# Monitor network connectivity
+ss -tuln | grep -E ':(389|636|88|464|53|80|443)'
+Review IdM logs for any issues:
+# Check directory server logs
+tail -f /var/log/dirsrv/slapd-EXAMPLE-COM/access
+
+# Check IdM installation logs
+tail -f /var/log/ipaserver-install.log
+
+# Check system logs
+journalctl -u ipa -f
+Troubleshooting Common Issues
+Issue 1: Replica Installation Fails
+Symptoms: Installation stops with DNS or connectivity errors
+
+Solution:
+
+# Verify DNS resolution
+nslookup idm-server.example.com
+nslookup idm-replica.example.com
+
+# Check network connectivity
+ping idm-server.example.com
+telnet idm-server.example.com 389
+
+# Verify firewall rules
+firewall-cmd --list-all
+Issue 2: Replication Not Working
+Symptoms: Changes don't replicate between servers
+
+Solution:
+
+# Check replication status
+ipa-replica-manage list -v
+
+# Restart IdM services
+ipactl restart
+
+# Force replication sync
+ipa-replica-manage force-sync --from idm-server.example.com
+Issue 3: Authentication Issues
+Symptoms: Cannot authenticate to replica server
+
+Solution:
+
+# Verify Kerberos configuration
+klist -k /etc/krb5.keytab
+
+# Check time synchronization
+chrony sources -v
+
+# Restart authentication services
+systemctl restart krb5kdc
+systemctl restart kadmin
+Best Practices for IdM Replication
+Security Considerations
+Use strong passwords for Directory Manager and admin accounts
+Implement proper firewall rules to restrict access
+Regularly update IdM packages for security patches
+Monitor replication logs for suspicious activities
+Performance Optimization
+Ensure adequate system resources (CPU, RAM, disk)
+Use fast storage for directory server databases
+Implement proper network bandwidth between replicas
+Regular maintenance and cleanup of old replication data
+Monitoring and Maintenance
+Set up automated monitoring for replication health
+Implement backup strategies for both servers
+Regular testing of failover scenarios
+Documentation of replication topology and procedures
+Conclusion
+Congratulations! You have successfully completed Lab 3: Installing and Configuring IdM Replica. In this lab, you accomplished several critical tasks:
+
+What You Learned
+High Availability Setup: You installed and configured an IdM replica server, providing redundancy and high availability for your identity management infrastructure
+Replication Configuration: You established and verified replication between the primary IdM server and replica, ensuring data consistency across both systems
+Monitoring Skills: You learned how to verify replication status and monitor the health of your IdM infrastructure
+Troubleshooting: You gained experience in identifying and resolving common replication issues
+Why This Matters
+IdM replication is crucial for enterprise environments because it:
+
+Ensures Business Continuity: If the primary server fails, the replica can continue serving authentication requests
+Improves Performance: Multiple servers can handle authentication loads, reducing response times
+Provides Geographic Distribution: Replicas can be placed in different locations to serve remote users efficiently
+Enhances Disaster Recovery: Multiple copies of identity data protect against data loss
+Next Steps
+With your IdM replica environment now operational, you're prepared to:
+
+Implement advanced IdM features like trust relationships
+Configure additional replicas for larger environments
+Integrate IdM with other enterprise applications
+Develop comprehensive backup and disaster recovery procedures
+This foundation in IdM replication will serve you well in real-world enterprise identity management scenarios and is essential knowledge for Red Hat Security: Identity Management and Authentication certification.
