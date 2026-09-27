@@ -1,0 +1,259 @@
+Lab 1: Installing the IdM Server
+Objectives
+By the end of this lab, you will be able to:
+
+• Install and configure Red Hat Identity Management (IdM) Server on RHEL 9 • Set up required repositories and packages for IdM functionality • Configure essential IdM components including Kerberos, LDAP, DNS, CA, and PostgreSQL • Understand the fundamental architecture of IdM services • Verify successful IdM server installation and basic functionality
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic knowledge of Linux command line operations • Understanding of system administration concepts • Familiarity with package management using dnf/yum • Basic networking concepts (DNS, IP addressing) • Root or sudo access to the system • At least 2GB RAM and 10GB free disk space available
+
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your RHEL 9 environment - no need to build your own virtual machine or configure hardware.
+
+Your lab environment includes: • Red Hat Enterprise Linux 9 server • Network connectivity and internet access • Root privileges for system configuration • All necessary base packages pre-installed
+
+Task 1: Set Up Required Repositories for IdM Installation
+Subtask 1.1: Verify System Information
+First, let's confirm we're working with the correct operating system and gather system information.
+
+# Check RHEL version
+cat /etc/redhat-release
+
+# Verify system hostname
+hostname
+
+# Check available memory
+free -h
+
+# Check disk space
+df -h
+Subtask 1.2: Update System Packages
+Ensure your system has the latest packages before proceeding with IdM installation.
+
+# Update all system packages
+sudo dnf update -y
+
+# Clean package cache
+sudo dnf clean all
+Subtask 1.3: Enable Required Repositories
+IdM packages are available in the standard RHEL repositories. Let's verify and enable the necessary repositories.
+
+# List enabled repositories
+sudo dnf repolist
+
+# Enable AppStream repository (usually enabled by default)
+sudo dnf config-manager --enable rhel-9-for-x86_64-appstream-rpms
+
+# Enable BaseOS repository (usually enabled by default)
+sudo dnf config-manager --enable rhel-9-for-x86_64-baseos-rpms
+Task 2: Install Required Packages
+Subtask 2.1: Install IdM Server Package Group
+The IdM server installation includes all necessary components. We'll install the complete server package.
+
+# Install IdM server with all components
+sudo dnf install -y ipa-server ipa-server-dns
+
+# Verify installation
+rpm -qa | grep ipa-server
+Subtask 2.2: Install Additional Required Packages
+Install supporting packages that may be needed for full functionality.
+
+# Install additional utilities
+sudo dnf install -y bind-utils krb5-workstation
+
+# Install firewall management tools
+sudo dnf install -y firewalld
+
+# Verify critical packages are installed
+rpm -q ipa-server ipa-server-dns bind-utils krb5-workstation
+Subtask 2.3: Verify Package Dependencies
+Check that all required dependencies are properly installed.
+
+# List IdM server package dependencies
+dnf deplist ipa-server | head -20
+
+# Check for any missing dependencies
+dnf check
+Task 3: Configure the IdM Server
+Subtask 3.1: Prepare System Configuration
+Before running the IdM server installation, we need to prepare the system configuration.
+
+# Set a proper hostname (replace 'idm.example.com' with your desired hostname)
+sudo hostnamectl set-hostname idm.example.com
+
+# Verify hostname change
+hostnamectl status
+
+# Update /etc/hosts file
+echo "$(ip route get 1.1.1.1 | awk '{print $7}' | head -1) idm.example.com idm" | sudo tee -a /etc/hosts
+
+# Verify hosts file
+cat /etc/hosts
+Subtask 3.2: Configure Firewall Rules
+Configure the firewall to allow IdM services.
+
+# Start and enable firewalld
+sudo systemctl start firewalld
+sudo systemctl enable firewalld
+
+# Add IdM services to firewall
+sudo firewall-cmd --permanent --add-service=freeipa-ldap
+sudo firewall-cmd --permanent --add-service=freeipa-ldaps
+sudo firewall-cmd --permanent --add-service=dns
+sudo firewall-cmd --permanent --add-service=ntp
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --permanent --add-service=kerberos
+sudo firewall-cmd --permanent --add-service=kpasswd
+
+# Reload firewall configuration
+sudo firewall-cmd --reload
+
+# Verify firewall rules
+sudo firewall-cmd --list-services
+Subtask 3.3: Run IdM Server Installation
+Now we'll run the interactive IdM server installation script.
+
+# Run the IdM server installation with DNS
+sudo ipa-server-install --setup-dns
+Important: The installation script will prompt you for several configuration options. Here are the typical responses:
+
+Server host name: Accept the default (idm.example.com) or enter your preferred FQDN
+Domain name: Accept the default (example.com) or enter your domain
+Realm name: Accept the default (EXAMPLE.COM) or enter your Kerberos realm
+Directory Manager password: Enter a strong password (minimum 8 characters)
+IPA admin password: Enter a strong password (minimum 8 characters)
+DNS forwarders: Enter your DNS server IPs (e.g., 8.8.8.8, 1.1.1.1) or press Enter for none
+Reverse zone: Choose whether to configure reverse DNS
+Continue with configuration: Type 'yes' to proceed
+Subtask 3.4: Monitor Installation Progress
+The installation process will take several minutes. Monitor the progress and watch for any errors.
+
+# If you need to check installation logs during or after installation
+sudo tail -f /var/log/ipaserver-install.log
+Subtask 3.5: Verify IdM Server Installation
+After successful installation, verify that all services are running properly.
+
+# Check IdM service status
+sudo ipactl status
+
+# Verify Kerberos authentication
+kinit admin
+
+# Check if you can access IdM information
+ipa user-show admin
+
+# Test DNS resolution
+nslookup idm.example.com
+
+# Verify web interface accessibility
+curl -k https://idm.example.com/ipa/ui/
+Subtask 3.6: Configure IdM Client on the Server
+Configure the server itself as an IdM client for full functionality.
+
+# The server should already be configured as a client, but let's verify
+ipa-client-install --unattended --principal admin --password 'YourAdminPassword'
+
+# Verify client configuration
+ipa config-show | grep "Default shell"
+Task 4: Post-Installation Configuration and Testing
+Subtask 4.1: Create Test User Account
+Create a test user to verify IdM functionality.
+
+# Create a test user
+ipa user-add testuser --first=Test --last=User --email=testuser@example.com --password
+
+# List all users
+ipa user-find
+
+# Show specific user details
+ipa user-show testuser
+Subtask 4.2: Test Web Interface Access
+Verify that the IdM web interface is accessible and functional.
+
+# Check if web services are running
+sudo systemctl status httpd
+
+# Test web interface connectivity
+curl -I -k https://idm.example.com/ipa/ui/
+
+# Display access information
+echo "IdM Web Interface: https://$(hostname)/ipa/ui/"
+echo "Username: admin"
+echo "Use the admin password you set during installation"
+Subtask 4.3: Verify DNS Functionality
+Test the integrated DNS server functionality.
+
+# Test DNS resolution for the IdM server
+dig @localhost idm.example.com
+
+# Test reverse DNS lookup
+dig @localhost -x $(ip route get 1.1.1.1 | awk '{print $7}' | head -1)
+
+# Check DNS service status
+sudo systemctl status named-pkcs11
+Troubleshooting Common Issues
+Issue 1: Installation Fails Due to Hostname Resolution
+Problem: Installation fails with hostname resolution errors.
+
+Solution:
+
+# Ensure hostname is properly set
+sudo hostnamectl set-hostname idm.example.com
+
+# Update /etc/hosts with correct IP and hostname
+sudo vi /etc/hosts
+# Add line: YOUR_IP_ADDRESS idm.example.com idm
+Issue 2: Firewall Blocking Services
+Problem: Services are not accessible due to firewall restrictions.
+
+Solution:
+
+# Temporarily disable firewall for testing
+sudo systemctl stop firewalld
+
+# Or add missing services
+sudo firewall-cmd --permanent --add-port=389/tcp
+sudo firewall-cmd --permanent --add-port=636/tcp
+sudo firewall-cmd --permanent --add-port=88/tcp
+sudo firewall-cmd --permanent --add-port=464/tcp
+sudo firewall-cmd --reload
+Issue 3: Services Not Starting
+Problem: IdM services fail to start after installation.
+
+Solution:
+
+# Check service status
+sudo ipactl status
+
+# Restart all IdM services
+sudo ipactl restart
+
+# Check system logs for errors
+sudo journalctl -u ipa -f
+Verification Checklist
+Before concluding this lab, verify the following:
+
+ IdM server installation completed successfully
+ All IdM services are running (sudo ipactl status)
+ Kerberos authentication works (kinit admin)
+ DNS resolution functions properly
+ Web interface is accessible
+ Test user account created successfully
+ Firewall rules are properly configured
+Conclusion
+Congratulations! You have successfully completed the installation and basic configuration of a Red Hat Identity Management (IdM) server on RHEL 9.
+
+What you accomplished:
+
+• Installed IdM Server: You set up a complete identity management solution that provides centralized authentication, authorization, and account information • Configured Core Services: You successfully configured Kerberos for authentication, LDAP for directory services, DNS for name resolution, and Certificate Authority for PKI services • Established Security Foundation: Your IdM server now serves as a central security authority that can manage users, groups, hosts, and services across your network • Created Management Interface: You have both command-line and web-based interfaces available for ongoing administration
+
+Why this matters:
+
+Identity Management is crucial for enterprise environments because it: • Provides single sign-on (SSO) capabilities for users • Centralizes user and system authentication • Enables consistent security policies across the infrastructure • Reduces administrative overhead through centralized management • Improves security through integrated certificate management and Kerberos authentication
+
+Your IdM server is now ready to serve as the foundation for enterprise identity and access management. In subsequent labs, you'll learn to add clients, create policies, manage certificates, and implement advanced IdM features.
+
+The skills you've developed in this lab are directly applicable to the Red Hat Security: Identity Management and Authentication certification and are essential for system administrators managing enterprise Linux environments.
