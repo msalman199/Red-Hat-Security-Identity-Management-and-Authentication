@@ -1,0 +1,627 @@
+Lab 5: Implementing a Single-Site IdM Topology
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the architecture and components of a single-site Identity Management (IdM) topology
+Install and configure a primary IdM server with integrated DNS
+Deploy and configure IdM replica servers for redundancy
+Configure network settings and DNS resolution for IdM infrastructure
+Test replication functionality between IdM servers
+Verify high availability and failover capabilities
+Troubleshoot common IdM topology issues
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with DNS concepts and configuration
+Knowledge of LDAP directory services fundamentals
+Experience with command-line interface operations
+Understanding of network configuration basics
+Familiarity with systemd service management
+Required Knowledge Areas
+Linux file permissions and ownership
+Basic networking concepts (IP addressing, DNS)
+Understanding of Kerberos authentication principles
+Familiarity with certificate management concepts
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure base systems.
+
+Lab Infrastructure
+Your lab environment includes:
+
+3 CentOS Stream 9 servers (4GB RAM, 2 vCPUs each)
+Pre-configured network connectivity between all servers
+Root access to all systems
+Internet connectivity for package installation
+Server Assignments
+idm-primary.lab.local (192.168.1.10) - Primary IdM server
+idm-replica1.lab.local (192.168.1.11) - First replica server
+idm-replica2.lab.local (192.168.1.12) - Second replica server
+Task 1: Prepare the Environment and Install Primary IdM Server
+Subtask 1.1: Configure System Prerequisites
+First, we'll prepare all three servers with the necessary system configurations.
+
+Step 1: Update all systems
+
+Execute on all three servers:
+
+# Update system packages
+sudo dnf update -y
+
+# Install essential tools
+sudo dnf install -y vim wget curl net-tools bind-utils
+Step 2: Configure hostnames and hosts file
+
+On the primary server (192.168.1.10):
+
+# Set hostname
+sudo hostnamectl set-hostname idm-primary.lab.local
+
+# Configure /etc/hosts
+sudo tee /etc/hosts << EOF
+127.0.0.1   localhost localhost.localdomain
+192.168.1.10    idm-primary.lab.local idm-primary
+192.168.1.11    idm-replica1.lab.local idm-replica1
+192.168.1.12    idm-replica2.lab.local idm-replica2
+EOF
+On the first replica server (192.168.1.11):
+
+# Set hostname
+sudo hostnamectl set-hostname idm-replica1.lab.local
+
+# Configure /etc/hosts (same content as above)
+sudo tee /etc/hosts << EOF
+127.0.0.1   localhost localhost.localdomain
+192.168.1.10    idm-primary.lab.local idm-primary
+192.168.1.11    idm-replica1.lab.local idm-replica1
+192.168.1.12    idm-replica2.lab.local idm-replica2
+EOF
+On the second replica server (192.168.1.12):
+
+# Set hostname
+sudo hostnamectl set-hostname idm-replica2.lab.local
+
+# Configure /etc/hosts (same content as above)
+sudo tee /etc/hosts << EOF
+127.0.0.1   localhost localhost.localdomain
+192.168.1.10    idm-primary.lab.local idm-primary
+192.168.1.11    idm-replica1.lab.local idm-replica1
+192.168.1.12    idm-replica2.lab.local idm-replica2
+EOF
+Step 3: Configure firewall rules
+
+Execute on all three servers:
+
+# Configure firewall for IdM services
+sudo firewall-cmd --permanent --add-service=freeipa-ldap
+sudo firewall-cmd --permanent --add-service=freeipa-ldaps
+sudo firewall-cmd --permanent --add-service=dns
+sudo firewall-cmd --permanent --add-service=ntp
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --permanent --add-service=kerberos
+sudo firewall-cmd --permanent --add-service=kpasswd
+
+# Reload firewall configuration
+sudo firewall-cmd --reload
+
+# Verify firewall rules
+sudo firewall-cmd --list-all
+Subtask 1.2: Install IdM Server Packages
+Step 1: Install IdM server packages on primary server
+
+Execute on the primary server only:
+
+# Install IdM server with integrated DNS
+sudo dnf module enable idm:DL1/server -y
+sudo dnf install -y ipa-server ipa-server-dns
+
+# Verify installation
+rpm -qa | grep ipa-server
+Subtask 1.3: Configure Primary IdM Server
+Step 1: Run IdM server installation
+
+Execute on the primary server:
+
+# Install and configure IdM server with integrated DNS
+sudo ipa-server-install \
+    --realm=LAB.LOCAL \
+    --domain=lab.local \
+    --ds-password=RedHat123! \
+    --admin-password=RedHat123! \
+    --hostname=idm-primary.lab.local \
+    --setup-dns \
+    --forwarder=8.8.8.8 \
+    --forwarder=8.8.4.4 \
+    --reverse-zone=1.168.192.in-addr.arpa. \
+    --unattended
+Important Notes:
+
+The installation process takes 10-15 minutes
+Use strong passwords in production environments
+The --unattended flag prevents interactive prompts
+Step 2: Verify IdM server installation
+
+# Check IdM services status
+sudo systemctl status ipa
+
+# Verify Kerberos authentication
+kinit admin
+# Enter password: RedHat123!
+
+# List Kerberos ticket
+klist
+
+# Test IdM command-line tools
+ipa user-find admin
+Step 3: Configure DNS resolution
+
+# Update /etc/resolv.conf to use local DNS
+sudo tee /etc/resolv.conf << EOF
+search lab.local
+nameserver 192.168.1.10
+nameserver 8.8.8.8
+EOF
+
+# Test DNS resolution
+nslookup idm-primary.lab.local
+dig @192.168.1.10 lab.local SOA
+Task 2: Set Up DNS and Network Configurations
+Subtask 2.1: Configure DNS Zones and Records
+Step 1: Create additional DNS records
+
+# Authenticate as admin
+kinit admin
+
+# Add DNS records for replica servers
+ipa dnsrecord-add lab.local idm-replica1 --a-rec=192.168.1.11
+ipa dnsrecord-add lab.local idm-replica2 --a-rec=192.168.1.12
+
+# Add reverse DNS records
+ipa dnsrecord-add 1.168.192.in-addr.arpa. 11 --ptr-rec=idm-replica1.lab.local.
+ipa dnsrecord-add 1.168.192.in-addr.arpa. 12 --ptr-rec=idm-replica2.lab.local.
+
+# Verify DNS records
+ipa dnsrecord-find lab.local
+Step 2: Test DNS resolution from primary server
+
+# Test forward resolution
+nslookup idm-replica1.lab.local
+nslookup idm-replica2.lab.local
+
+# Test reverse resolution
+nslookup 192.168.1.11
+nslookup 192.168.1.12
+
+# Test SRV records
+dig _ldap._tcp.lab.local SRV
+dig _kerberos._tcp.lab.local SRV
+Subtask 2.2: Configure Network Settings on Replica Servers
+Step 1: Update DNS settings on replica servers
+
+Execute on both replica servers (idm-replica1 and idm-replica2):
+
+# Configure DNS to use primary IdM server
+sudo tee /etc/resolv.conf << EOF
+search lab.local
+nameserver 192.168.1.10
+nameserver 8.8.8.8
+EOF
+
+# Test DNS resolution
+nslookup idm-primary.lab.local
+nslookup lab.local
+Step 2: Verify network connectivity
+
+Execute on both replica servers:
+
+# Test connectivity to primary server
+ping -c 3 idm-primary.lab.local
+
+# Test LDAP connectivity
+telnet idm-primary.lab.local 389
+
+# Test LDAPS connectivity
+openssl s_client -connect idm-primary.lab.local:636 -verify_return_error
+Task 3: Deploy IdM Replica Servers
+Subtask 3.1: Install IdM Client Packages on Replica Servers
+Step 1: Install packages on first replica server
+
+Execute on idm-replica1.lab.local:
+
+# Install IdM server packages
+sudo dnf module enable idm:DL1/server -y
+sudo dnf install -y ipa-server ipa-server-dns
+
+# Verify installation
+rpm -qa | grep ipa-server
+Step 2: Install packages on second replica server
+
+Execute on idm-replica2.lab.local:
+
+# Install IdM server packages
+sudo dnf module enable idm:DL1/server -y
+sudo dnf install -y ipa-server ipa-server-dns
+
+# Verify installation
+rpm -qa | grep ipa-server
+Subtask 3.2: Configure First Replica Server
+Step 1: Install replica with DNS
+
+Execute on idm-replica1.lab.local:
+
+# Install IdM replica with DNS services
+sudo ipa-replica-install \
+    --server=idm-primary.lab.local \
+    --domain=lab.local \
+    --realm=LAB.LOCAL \
+    --hostname=idm-replica1.lab.local \
+    --setup-dns \
+    --forwarder=8.8.8.8 \
+    --forwarder=8.8.4.4 \
+    --principal=admin \
+    --admin-password=RedHat123! \
+    --unattended
+Step 2: Verify first replica installation
+
+# Check services status
+sudo systemctl status ipa
+
+# Test authentication
+kinit admin
+# Enter password: RedHat123!
+
+# Verify replication
+ipa user-find admin
+
+# Check DNS functionality
+dig @localhost lab.local SOA
+Subtask 3.3: Configure Second Replica Server
+Step 1: Install second replica
+
+Execute on idm-replica2.lab.local:
+
+# Install IdM replica with DNS services
+sudo ipa-replica-install \
+    --server=idm-primary.lab.local \
+    --domain=lab.local \
+    --realm=LAB.LOCAL \
+    --hostname=idm-replica2.lab.local \
+    --setup-dns \
+    --forwarder=8.8.8.8 \
+    --forwarder=8.8.4.4 \
+    --principal=admin \
+    --admin-password=RedHat123! \
+    --unattended
+Step 2: Verify second replica installation
+
+# Check services status
+sudo systemctl status ipa
+
+# Test authentication
+kinit admin
+# Enter password: RedHat123!
+
+# Verify replication
+ipa user-find admin
+
+# Check DNS functionality
+dig @localhost lab.local SOA
+Task 4: Test Redundancy and Replication
+Subtask 4.1: Test Directory Replication
+Step 1: Create test users on primary server
+
+Execute on idm-primary.lab.local:
+
+# Authenticate as admin
+kinit admin
+
+# Create test users
+ipa user-add testuser1 --first=Test --last=User1 --password
+# Enter password when prompted: TestPass123!
+
+ipa user-add testuser2 --first=Test --last=User2 --password
+# Enter password when prompted: TestPass123!
+
+# Create test group
+ipa group-add testgroup --desc="Test Group for Replication"
+
+# Add users to group
+ipa group-add-member testgroup --users=testuser1,testuser2
+
+# Verify creation
+ipa user-find testuser1
+ipa group-show testgroup
+Step 2: Verify replication on replica servers
+
+Execute on idm-replica1.lab.local:
+
+# Authenticate as admin
+kinit admin
+
+# Check if users replicated
+ipa user-find testuser1
+ipa user-find testuser2
+
+# Check if group replicated
+ipa group-show testgroup
+
+# Verify group membership
+ipa group-show testgroup --all
+Execute on idm-replica2.lab.local:
+
+# Authenticate as admin
+kinit admin
+
+# Check if users replicated
+ipa user-find testuser1
+ipa user-find testuser2
+
+# Check if group replicated
+ipa group-show testgroup
+Subtask 4.2: Test DNS Replication
+Step 1: Add DNS records on primary server
+
+Execute on idm-primary.lab.local:
+
+# Add test DNS records
+ipa dnsrecord-add lab.local testhost --a-rec=192.168.1.100
+ipa dnsrecord-add lab.local webserver --cname-rec=testhost
+
+# Verify records
+ipa dnsrecord-show lab.local testhost
+ipa dnsrecord-show lab.local webserver
+Step 2: Verify DNS replication on replicas
+
+Execute on idm-replica1.lab.local:
+
+# Query DNS records locally
+dig @localhost testhost.lab.local A
+dig @localhost webserver.lab.local CNAME
+
+# Verify through IdM commands
+kinit admin
+ipa dnsrecord-show lab.local testhost
+Execute on idm-replica2.lab.local:
+
+# Query DNS records locally
+dig @localhost testhost.lab.local A
+dig @localhost webserver.lab.local CNAME
+
+# Verify through IdM commands
+kinit admin
+ipa dnsrecord-show lab.local testhost
+Subtask 4.3: Test High Availability and Failover
+Step 1: Test client failover scenario
+
+Create a test script on all servers:
+
+# Create failover test script
+sudo tee /root/test-failover.sh << 'EOF'
+#!/bin/bash
+
+echo "Testing IdM server availability..."
+
+# Test each server
+for server in idm-primary.lab.local idm-replica1.lab.local idm-replica2.lab.local; do
+    echo "Testing $server..."
+    
+    # Test LDAP connectivity
+    if ldapsearch -x -H ldap://$server -b "dc=lab,dc=local" -s base > /dev/null 2>&1; then
+        echo "  LDAP: OK"
+    else
+        echo "  LDAP: FAILED"
+    fi
+    
+    # Test DNS
+    if nslookup lab.local $server > /dev/null 2>&1; then
+        echo "  DNS: OK"
+    else
+        echo "  DNS: FAILED"
+    fi
+    
+    # Test HTTP
+    if curl -k https://$server/ipa/ui/ > /dev/null 2>&1; then
+        echo "  Web UI: OK"
+    else
+        echo "  Web UI: FAILED"
+    fi
+    
+    echo ""
+done
+EOF
+
+# Make script executable
+sudo chmod +x /root/test-failover.sh
+Step 2: Run baseline test
+
+Execute on any server:
+
+# Run failover test
+sudo /root/test-failover.sh
+Step 3: Simulate primary server failure
+
+Execute on idm-primary.lab.local:
+
+# Stop IdM services to simulate failure
+sudo systemctl stop ipa
+sudo systemctl status ipa
+Step 4: Test failover from replica servers
+
+Execute on idm-replica1.lab.local:
+
+# Test authentication still works
+kinit admin
+
+# Test user operations
+ipa user-find testuser1
+
+# Run failover test
+sudo /root/test-failover.sh
+Step 5: Restore primary server
+
+Execute on idm-primary.lab.local:
+
+# Restart IdM services
+sudo systemctl start ipa
+sudo systemctl status ipa
+
+# Verify services are running
+kinit admin
+ipa user-find admin
+Subtask 4.4: Monitor Replication Status
+Step 1: Check replication agreements
+
+Execute on idm-primary.lab.local:
+
+# Check replication topology
+kinit admin
+ipa topologysegment-find domain
+
+# Check replication status
+ipa-replica-manage list
+ipa-replica-manage list-ruv
+Step 2: Monitor replication health
+
+# Create replication monitoring script
+sudo tee /root/check-replication.sh << 'EOF'
+#!/bin/bash
+
+echo "=== IdM Replication Status ==="
+echo "Date: $(date)"
+echo ""
+
+# Check topology
+echo "Topology Segments:"
+ipa topologysegment-find domain --all
+
+echo ""
+echo "Replication Agreements:"
+ipa-replica-manage list
+
+echo ""
+echo "RUV Information:"
+ipa-replica-manage list-ruv
+
+echo ""
+echo "=== End Report ==="
+EOF
+
+# Make executable
+sudo chmod +x /root/check-replication.sh
+
+# Run the script
+sudo /root/check-replication.sh
+Troubleshooting Common Issues
+Issue 1: DNS Resolution Problems
+Symptoms: Cannot resolve IdM server hostnames
+
+Solution:
+
+# Check DNS configuration
+cat /etc/resolv.conf
+
+# Test DNS resolution
+nslookup idm-primary.lab.local
+
+# Restart DNS service
+sudo systemctl restart named-pkcs11
+Issue 2: Replication Not Working
+Symptoms: Changes don't appear on replica servers
+
+Solution:
+
+# Check replication status
+ipa-replica-manage list
+ipa-replica-manage list-ruv
+
+# Force replication
+ipa-replica-manage force-sync --from idm-primary.lab.local
+
+# Check for replication errors
+sudo journalctl -u ipa -f
+Issue 3: Authentication Failures
+Symptoms: Cannot authenticate with kinit
+
+Solution:
+
+# Check Kerberos configuration
+cat /etc/krb5.conf
+
+# Test Kerberos connectivity
+telnet idm-primary.lab.local 88
+
+# Clear credential cache
+kdestroy
+kinit admin
+Issue 4: Web UI Not Accessible
+Symptoms: Cannot access IdM web interface
+
+Solution:
+
+# Check Apache status
+sudo systemctl status httpd
+
+# Check SSL certificates
+sudo ipa-server-certinstall --help
+
+# Restart web services
+sudo systemctl restart httpd
+Verification and Testing Checklist
+Use this checklist to verify your IdM topology is working correctly:
+
+Primary Server Verification
+ IdM services are running (systemctl status ipa)
+ DNS resolution works for all servers
+ Web UI is accessible (https://idm-primary.lab.local/ipa/ui/)
+ Admin user can authenticate
+ Can create and manage users/groups
+Replica Server Verification
+ IdM services are running on both replicas
+ DNS resolution works from replicas
+ Web UI is accessible on replicas
+ Admin authentication works on replicas
+ Directory data is replicated
+Replication Verification
+ User created on primary appears on replicas
+ Group created on primary appears on replicas
+ DNS records replicate between servers
+ Password changes replicate
+ Topology segments are healthy
+High Availability Verification
+ Services continue when primary is down
+ Authentication works through replicas
+ DNS resolution continues through replicas
+ Changes sync when primary returns
+Conclusion
+In this lab, you have successfully implemented a single-site IdM topology with the following accomplishments:
+
+What You Achieved
+Deployed a Complete IdM Infrastructure: You installed and configured a primary IdM server with integrated DNS, providing centralized identity management for your organization.
+
+Implemented High Availability: By deploying two replica servers, you created a resilient infrastructure that can continue operating even if the primary server fails.
+
+Configured DNS Integration: You set up integrated DNS services that automatically manage service discovery records, making client configuration seamless.
+
+Tested Replication and Failover: You verified that directory data, DNS records, and authentication services replicate correctly across all servers and tested failover scenarios.
+
+Established Monitoring Procedures: You created scripts and procedures to monitor replication health and troubleshoot common issues.
+
+Why This Matters
+Business Continuity: The redundant topology ensures that authentication and directory services remain available even during server maintenance or failures, minimizing business disruption.
+
+Scalability: This foundation can be expanded to support multiple sites, additional replicas, and thousands of users as your organization grows.
+
+Security: Centralized identity management provides consistent security policies, password requirements, and access controls across your entire infrastructure.
+
+Operational Efficiency: Automated replication and integrated DNS reduce administrative overhead and eliminate single points of failure.
+
+Next Steps
+With this single-site topology in place, you're prepared to:
+
+Add client systems to the IdM domain
+Implement advanced authentication methods (2FA, smart cards)
+Configure cross-realm trusts with Active Directory
+Deploy additional replicas for geographic distribution
+Implement backup and disaster recovery procedures
+This lab has provided you with the foundational skills needed for Red Hat Identity Management and prepares you for more advanced IdM topics and real-world deployments.
