@@ -1,0 +1,221 @@
+Lab 2: Configuring the IdM Server
+Objectives
+By the end of this lab, students will be able to:
+
+Configure a Red Hat Identity Management (IdM) server for basic functionality
+Set up proper network and DNS configurations for IdM
+Verify that IdM services are running correctly
+Understand the fundamental components of an IdM deployment
+Troubleshoot common IdM configuration issues
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with network concepts (DNS, IP addressing)
+Knowledge of system administration fundamentals
+Understanding of directory services concepts
+Completion of Lab 1 (IdM Server Installation) or equivalent knowledge
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machine or install software.
+
+Your lab environment includes:
+
+Red Hat Enterprise Linux 9 or CentOS Stream 9
+Pre-installed IdM server packages
+Network connectivity configured
+Root access privileges
+Task 1: Run the IdM Configuration Tool
+Subtask 1.1: Verify System Prerequisites
+Before configuring IdM, ensure your system meets all requirements.
+
+Check system hostname and FQDN:
+hostname
+hostname -f
+Verify DNS resolution:
+nslookup $(hostname -f)
+dig $(hostname -f)
+Check available memory and disk space:
+free -h
+df -h
+Ensure firewall is configured:
+systemctl status firewalld
+firewall-cmd --list-all
+Subtask 1.2: Prepare the IdM Installation
+Set the system hostname if not already configured:
+hostnamectl set-hostname idm.example.com
+Update the hosts file:
+echo "192.168.1.100 idm.example.com idm" >> /etc/hosts
+Note: Replace 192.168.1.100 with your actual IP address
+
+Verify time synchronization:
+systemctl status chronyd
+chrony sources -v
+Subtask 1.3: Run the IdM Server Installation Command
+Execute the IdM server installation with basic configuration:
+ipa-server-install \
+  --realm=EXAMPLE.COM \
+  --domain=example.com \
+  --ds-password=SecurePassword123! \
+  --admin-password=AdminPassword123! \
+  --hostname=idm.example.com \
+  --ip-address=192.168.1.100 \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --unattended
+Parameter Explanation:
+
+--realm: Kerberos realm name (typically uppercase domain)
+--domain: DNS domain name
+--ds-password: Directory Server password
+--admin-password: IdM admin user password
+--hostname: Fully qualified domain name
+--ip-address: Server IP address
+--setup-dns: Configure integrated DNS
+--forwarder: DNS forwarders for external queries
+--unattended: Non-interactive installation
+Monitor the installation progress: The installation process will take 10-15 minutes. Watch for any error messages and note the final configuration summary.
+
+Verify installation completion: Look for the message: "The ipa-server-install command was successful"
+
+Task 2: Set Up Network and DNS Configurations
+Subtask 2.1: Configure DNS Settings
+Verify DNS zone creation:
+ipa dnszone-find
+Check DNS records:
+ipa dnsrecord-find example.com
+Test DNS resolution for IdM server:
+dig @localhost idm.example.com
+dig @localhost -x 192.168.1.100
+Subtask 2.2: Configure Network Services
+Ensure NetworkManager is properly configured:
+systemctl status NetworkManager
+nmcli connection show
+Verify network interface configuration:
+ip addr show
+ip route show
+Update DNS settings in NetworkManager:
+nmcli connection modify "System eth0" ipv4.dns "127.0.0.1"
+nmcli connection modify "System eth0" ipv4.dns-search "example.com"
+nmcli connection up "System eth0"
+Note: Replace "System eth0" with your actual connection name
+
+Subtask 2.3: Configure Firewall Rules
+Add IdM services to firewall:
+firewall-cmd --permanent --add-service=freeipa-ldap
+firewall-cmd --permanent --add-service=freeipa-ldaps
+firewall-cmd --permanent --add-service=dns
+firewall-cmd --permanent --add-service=ntp
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+firewall-cmd --permanent --add-service=kerberos
+firewall-cmd --permanent --add-service=kpasswd
+Reload firewall configuration:
+firewall-cmd --reload
+Verify firewall rules:
+firewall-cmd --list-all
+Task 3: Confirm IdM Service is Running
+Subtask 3.1: Check Core IdM Services
+Verify all IdM services are active:
+systemctl status ipa
+Check individual service status:
+systemctl status dirsrv@EXAMPLE-COM.service
+systemctl status krb5kdc.service
+systemctl status kadmin.service
+systemctl status named.service
+systemctl status httpd.service
+systemctl status ipa-custodia.service
+systemctl status ipa-dnskeysyncd.service
+View IdM service logs:
+journalctl -u ipa -f
+Subtask 3.2: Test IdM Functionality
+Obtain Kerberos ticket for admin user:
+kinit admin
+Enter the admin password when prompted
+
+Verify Kerberos ticket:
+klist
+Test IdM command-line tools:
+ipa user-find admin
+ipa config-show
+Subtask 3.3: Access IdM Web Interface
+Test web interface connectivity:
+curl -k https://idm.example.com/ipa/ui/
+Access the web interface:
+
+Open a web browser
+Navigate to: https://idm.example.com/ipa/ui/
+Accept the self-signed certificate warning
+Login with username: admin and the password you set during installation
+Verify web interface functionality:
+
+Navigate to Identity → Users
+Navigate to Policy → Host-Based Access Control
+Navigate to Authentication → Certificates
+Subtask 3.4: Perform Basic Configuration Tests
+Test DNS functionality:
+dig @idm.example.com example.com SOA
+dig @idm.example.com idm.example.com A
+Test LDAP connectivity:
+ldapsearch -x -H ldap://idm.example.com -b "dc=example,dc=com" -s base
+Verify certificate authority:
+ipa ca-find
+ipa cert-find --all
+Troubleshooting Common Issues
+DNS Resolution Problems
+If DNS queries fail:
+
+# Check named service
+systemctl status named
+journalctl -u named -f
+
+# Verify DNS configuration
+ipa dnsconfig-show
+Service Startup Issues
+If services fail to start:
+
+# Check service dependencies
+systemctl list-dependencies ipa
+
+# Review detailed logs
+journalctl -xe
+Web Interface Access Problems
+If web interface is inaccessible:
+
+# Check httpd service
+systemctl status httpd
+journalctl -u httpd -f
+
+# Verify SSL certificates
+openssl s_client -connect idm.example.com:443
+Kerberos Authentication Issues
+If kinit fails:
+
+# Check KDC service
+systemctl status krb5kdc
+
+# Test with verbose output
+kinit -V admin
+Verification Checklist
+Before proceeding to the next lab, ensure:
+
+ IdM server installation completed successfully
+ All core services are running and enabled
+ DNS resolution works for the IdM domain
+ Firewall rules are properly configured
+ Kerberos authentication is functional
+ Web interface is accessible
+ Basic IdM commands execute without errors
+Conclusion
+In this lab, you have successfully configured a Red Hat Identity Management server with essential functionality. You accomplished the following key tasks:
+
+What You Accomplished:
+
+Configured the IdM server using the installation tool with proper parameters
+Set up integrated DNS services with appropriate forwarders
+Configured network settings and firewall rules for IdM services
+Verified that all critical IdM services are running correctly
+Tested basic functionality through command-line tools and web interface
+Why This Matters: A properly configured IdM server serves as the foundation for enterprise identity and access management. The DNS integration ensures seamless service discovery, while the verified service status guarantees that authentication, authorization, and directory services are available for client systems. This configuration provides the secure, centralized identity management infrastructure that modern organizations require for managing users, hosts, and services across their IT environment.
+
+The skills you've developed in this lab are essential for Red Hat Security: Identity Management and Authentication certification and provide practical experience with enterprise-grade identity management solutions used in production environments worldwide.
