@@ -1,0 +1,247 @@
+Lab 8: Managing DNS Integrated with IdM
+Objectives
+By the end of this lab, students will be able to:
+
+Configure DNS services for Identity Management (IdM) integration
+Modify DNS configuration settings using IdM tools
+Integrate DNS with IdM for centralized name resolution
+Verify DNS resolution functionality for IdM servers and clients
+Troubleshoot common DNS integration issues in IdM environments
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of DNS concepts and terminology
+Familiarity with Linux command-line interface
+Knowledge of Identity Management (IdM) fundamentals
+Understanding of network configuration basics
+Experience with text editors like vi or nano
+Required Knowledge Areas
+DNS record types (A, PTR, SRV, TXT)
+IdM server architecture and components
+Basic networking concepts (IP addressing, subnetting)
+Linux system administration basics
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure base systems.
+
+Lab Infrastructure
+Your lab environment includes:
+
+idm-server: Primary IdM server (192.168.1.10)
+idm-client: IdM client machine (192.168.1.20)
+Domain: example.com
+Operating System: Red Hat Enterprise Linux 9 or CentOS Stream 9
+Task 1: Configure DNS Services for IdM in /etc/named.conf
+Subtask 1.1: Examine Current DNS Configuration
+First, let's examine the existing DNS configuration to understand the current setup.
+
+Connect to the IdM server:
+ssh root@idm-server
+Check if BIND DNS service is installed:
+rpm -qa | grep bind
+systemctl status named
+Examine the current named.conf file:
+cat /etc/named.conf
+Create a backup of the original configuration:
+cp /etc/named.conf /etc/named.conf.backup
+Subtask 1.2: Configure Basic DNS Settings
+Edit the named.conf file:
+vi /etc/named.conf
+Add the following configuration (replace existing content if necessary):
+//
+// named.conf for IdM integration
+//
+options {
+    listen-on port 53 { 127.0.0.1; 192.168.1.10; };
+    listen-on-v6 port 53 { ::1; };
+    directory       "/var/named";
+    dump-file       "/var/named/data/cache_dump.db";
+    statistics-file "/var/named/data/named_stats.txt";
+    memstatistics-file "/var/named/data/named_mem_stats.txt";
+    secroots-file   "/var/named/data/named.secroots";
+    recursing-file  "/var/named/data/named.recursing";
+    allow-query     { localhost; 192.168.1.0/24; };
+    allow-recursion { localhost; 192.168.1.0/24; };
+    
+    dnssec-enable yes;
+    dnssec-validation yes;
+    
+    bindkeys-file "/etc/named.root.key";
+    
+    managed-keys-directory "/var/named/dynamic";
+    
+    pid-file "/run/named/named.pid";
+    session-keyfile "/run/named/session.key";
+    
+    forwarders {
+        8.8.8.8;
+        8.8.4.4;
+    };
+    forward only;
+};
+
+logging {
+    channel default_debug {
+        file "data/named.run";
+        severity dynamic;
+    };
+};
+
+zone "." IN {
+    type hint;
+    file "named.ca";
+};
+
+include "/etc/named.rfc1912.zones";
+include "/etc/named.root.key";
+
+// IdM will manage these zones dynamically
+include "/etc/named/ipa-ext.conf";
+include "/etc/named/ipa-options-ext.conf";
+Set proper permissions:
+chown root:named /etc/named.conf
+chmod 640 /etc/named.conf
+Subtask 1.3: Verify DNS Configuration Syntax
+Check configuration syntax:
+named-checkconf /etc/named.conf
+If no errors are reported, start the named service:
+systemctl enable named
+systemctl start named
+systemctl status named
+Check if DNS is listening on the correct ports:
+netstat -tulpn | grep :53
+Task 2: Integrate DNS with IdM using ipa dnsconfig-mod
+Subtask 2.1: Verify IdM Server Status
+Check IdM server status:
+ipactl status
+If IdM is not running, start it:
+ipactl start
+Authenticate as IdM administrator:
+kinit admin
+Subtask 2.2: Configure DNS Integration Settings
+View current DNS configuration in IdM:
+ipa dnsconfig-show
+Configure DNS forwarders for external resolution:
+ipa dnsconfig-mod --forwarder=8.8.8.8 --forwarder=8.8.4.4
+Enable DNS forwarding:
+ipa dnsconfig-mod --forward-policy=only
+Configure DNS search domains:
+ipa dnsconfig-mod --allow-sync-ptr=TRUE
+Subtask 2.3: Create DNS Zones in IdM
+Create forward DNS zone:
+ipa dnszone-add example.com --admin-email=admin@example.com
+Create reverse DNS zone:
+ipa dnszone-add 1.168.192.in-addr.arpa --admin-email=admin@example.com
+Verify zones were created:
+ipa dnszone-find
+Subtask 2.4: Add DNS Records
+Add A record for IdM server:
+ipa dnsrecord-add example.com idm-server --a-rec=192.168.1.10
+Add PTR record for reverse resolution:
+ipa dnsrecord-add 1.168.192.in-addr.arpa 10 --ptr-rec=idm-server.example.com.
+Add SRV records for IdM services:
+ipa dnsrecord-add example.com _ldap._tcp --srv-rec="0 100 389 idm-server.example.com."
+ipa dnsrecord-add example.com _kerberos._tcp --srv-rec="0 100 88 idm-server.example.com."
+ipa dnsrecord-add example.com _kerberos._udp --srv-rec="0 100 88 idm-server.example.com."
+Verify DNS records:
+ipa dnsrecord-find example.com
+Task 3: Verify DNS Resolution for IdM Servers and Clients
+Subtask 3.1: Test DNS Resolution on IdM Server
+Test forward DNS resolution:
+nslookup idm-server.example.com localhost
+Test reverse DNS resolution:
+nslookup 192.168.1.10 localhost
+Test SRV record resolution:
+dig @localhost _ldap._tcp.example.com SRV
+Test external DNS forwarding:
+nslookup google.com localhost
+Subtask 3.2: Configure IdM Client DNS Settings
+Connect to the IdM client machine:
+ssh root@idm-client
+Configure client to use IdM server as DNS:
+vi /etc/resolv.conf
+Add the following content:
+search example.com
+nameserver 192.168.1.10
+nameserver 8.8.8.8
+Make the configuration persistent:
+chattr +i /etc/resolv.conf
+Subtask 3.3: Test DNS Resolution from Client
+Test IdM server resolution from client:
+nslookup idm-server.example.com
+Test reverse resolution from client:
+nslookup 192.168.1.10
+Test SRV record resolution from client:
+dig _ldap._tcp.example.com SRV
+Verify client can resolve external domains:
+nslookup google.com
+Subtask 3.4: Advanced DNS Verification
+Use systemd-resolve to check DNS status (if available):
+systemd-resolve --status
+Test DNS with specific query types:
+dig @192.168.1.10 example.com SOA
+dig @192.168.1.10 example.com NS
+dig @192.168.1.10 idm-server.example.com A
+Check DNS cache:
+rndc dumpdb -cache
+cat /var/named/data/cache_dump.db | grep example.com
+Troubleshooting Common Issues
+DNS Service Issues
+Problem: Named service fails to start Solution:
+
+# Check configuration syntax
+named-checkconf /etc/named.conf
+
+# Check system logs
+journalctl -u named -f
+
+# Verify file permissions
+ls -la /etc/named.conf
+IdM DNS Integration Issues
+Problem: DNS zones not appearing in IdM Solution:
+
+# Restart IdM services
+ipactl restart
+
+# Check IdM logs
+tail -f /var/log/ipaserver-install.log
+
+# Verify DNS plugin is loaded
+ipa plugins-show dns
+Client Resolution Issues
+Problem: Client cannot resolve IdM records Solution:
+
+# Check network connectivity
+ping 192.168.1.10
+
+# Verify DNS server is responding
+nslookup idm-server.example.com 192.168.1.10
+
+# Check firewall settings
+firewall-cmd --list-all
+Verification Commands Summary
+Use these commands to verify your lab completion:
+
+# On IdM Server
+systemctl status named
+ipa dnsconfig-show
+ipa dnszone-find
+nslookup idm-server.example.com localhost
+
+# On IdM Client  
+cat /etc/resolv.conf
+nslookup idm-server.example.com
+dig _ldap._tcp.example.com SRV
+Conclusion
+In this lab, you have successfully:
+
+Configured DNS services by modifying /etc/named.conf to support IdM integration with proper security settings and forwarders
+Integrated DNS with IdM using ipa dnsconfig-mod commands to enable centralized DNS management through the Identity Management system
+Created DNS zones and records for both forward and reverse resolution, including critical SRV records for IdM services
+Verified DNS resolution from both server and client perspectives, ensuring proper name resolution for IdM infrastructure
+This integration is crucial for enterprise environments because it provides:
+
+Centralized Management: DNS records are managed through IdM's web interface and command-line tools
+Automatic Updates: IdM automatically maintains DNS records for enrolled clients and services
+Security Integration: DNS is integrated with Kerberos authentication and LDAP directory services
+High Availability: DNS configuration can be replicated across multiple IdM servers
+Understanding DNS integration with IdM is essential for Red Hat Identity Management deployments, as it ensures reliable service discovery and name resolution in enterprise environments. This knowledge directly applies to the Red Hat Security: Identity Management and Authentication certification objectives.
