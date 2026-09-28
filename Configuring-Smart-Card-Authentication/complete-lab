@@ -1,0 +1,238 @@
+
+Lab 11: Configuring Smart Card Authentication
+Objectives
+By the end of this lab, students will be able to:
+
+• Install and configure smart card middleware on a Linux system • Configure smart card authentication in Red Hat Identity Management (IdM) • Test smart card authentication for user login • Understand the security benefits of multi-factor authentication using smart cards • Troubleshoot common smart card authentication issues
+
+Prerequisites
+Before starting this lab, students should have:
+
+• Basic understanding of Linux command line operations • Familiarity with Red Hat Identity Management (IdM) concepts • Knowledge of PKI (Public Key Infrastructure) fundamentals • Understanding of authentication and authorization concepts • Access to a Red Hat Enterprise Linux system with IdM installed
+
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes: • Red Hat Enterprise Linux 9 server with IdM configured • Smart card simulation tools • Required middleware packages • Sample certificates and keys
+
+Task 1: Install and Configure Smart Card Middleware
+Subtask 1.1: Install Required Packages
+First, we need to install the necessary packages for smart card support.
+
+Connect to your lab machine and open a terminal as root user.
+
+Update the system packages:
+
+dnf update -y
+Install smart card middleware packages:
+dnf install -y pcsc-lite pcsc-lite-libs pcsc-tools opensc coolkey
+Install additional authentication packages:
+dnf install -y pam_pkcs11 mozilla-pkcs11-loader nss-tools
+Verify the installation:
+rpm -qa | grep -E "(pcsc|opensc|coolkey|pam_pkcs11)"
+Subtask 1.2: Start and Enable Smart Card Services
+Start the PC/SC daemon:
+systemctl start pcscd
+systemctl enable pcscd
+Verify the service is running:
+systemctl status pcscd
+Check for smart card readers (this will show virtual readers in our lab environment):
+pcsc_scan
+Press Ctrl+C to exit the scan after a few seconds.
+
+Subtask 1.3: Configure OpenSC for Smart Card Access
+Create OpenSC configuration directory:
+mkdir -p /etc/opensc
+Create OpenSC configuration file:
+cat > /etc/opensc/opensc.conf << 'EOF'
+app default {
+    debug = 0;
+    debug_file = /tmp/opensc-debug.log;
+    
+    framework pkcs15 {
+        use_file_caching = true;
+        pin_cache = true;
+        pin_cache_counter = 10;
+    }
+}
+EOF
+Set proper permissions:
+chmod 644 /etc/opensc/opensc.conf
+Task 2: Configure Smart Card Authentication in IdM
+Subtask 2.1: Prepare IdM for Smart Card Authentication
+Ensure IdM server is running:
+systemctl status ipa
+Authenticate as IdM admin:
+kinit admin
+Enter the admin password when prompted.
+
+Check current IdM configuration:
+ipa config-show | grep -i cert
+Subtask 2.2: Create Certificate Authority for Smart Cards
+Create a directory for certificate operations:
+mkdir -p /root/smartcard-certs
+cd /root/smartcard-certs
+Generate a private key for the CA:
+openssl genrsa -out ca-key.pem 4096
+Create CA certificate:
+openssl req -new -x509 -key ca-key.pem -out ca-cert.pem -days 365 -subj "/C=US/ST=State/L=City/O=Lab Organization/OU=IT Department/CN=Smart Card CA"
+Import CA certificate into IdM:
+ipa-cacert-manage install ca-cert.pem
+systemctl restart httpd
+Subtask 2.3: Configure Smart Card Authentication Policy
+Enable smart card authentication globally:
+ipa config-mod --user-auth-type=password --user-auth-type=otp --user-auth-type=pkinit
+Create a smart card authentication rule:
+ipa krbtpolicy-mod --maxlife=86400 --maxrenew=604800
+Configure PAM for smart card authentication:
+authselect select ipa with-smartcard --force
+Subtask 2.4: Create User Certificates
+Create a test user in IdM:
+ipa user-add testuser --first=Test --last=User --email=testuser@example.com
+Set a temporary password for the user:
+echo "TempPass123!" | ipa passwd testuser --password
+Generate a private key for the test user:
+openssl genrsa -out testuser-key.pem 2048
+Create a certificate signing request:
+openssl req -new -key testuser-key.pem -out testuser-csr.pem -subj "/C=US/ST=State/L=City/O=Lab Organization/OU=Users/CN=testuser"
+Sign the certificate with our CA:
+openssl x509 -req -in testuser-csr.pem -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out testuser-cert.pem -days 365
+Create PKCS#12 file for the smart card:
+openssl pkcs12 -export -out testuser.p12 -inkey testuser-key.pem -in testuser-cert.pem -certfile ca-cert.pem -password pass:smartcard123
+Task 3: Test Smart Card Authentication for User Login
+Subtask 3.1: Simulate Smart Card with Software Token
+Install software token simulator:
+dnf install -y softhsm2
+Initialize the software token:
+softhsm2-util --init-token --slot 0 --label "TestCard" --so-pin 123456 --pin 1234
+Import the user certificate into the token:
+pkcs11-tool --module /usr/lib64/pkcs11/libsofthsm2.so --login --pin 1234 --write-object testuser-cert.pem --type cert --label "testuser"
+Import the private key into the token:
+openssl rsa -in testuser-key.pem -out testuser-key-plain.pem
+pkcs11-tool --module /usr/lib64/pkcs11/libsofthsm2.so --login --pin 1234 --write-object testuser-key-plain.pem --type privkey --label "testuser"
+Subtask 3.2: Configure PAM for Smart Card Authentication
+Create PAM PKCS#11 configuration:
+cat > /etc/pam_pkcs11/pam_pkcs11.conf << 'EOF'
+pam_pkcs11 {
+    nullok = false;
+    debug = false;
+    use_first_pass = false;
+    try_first_pass = false;
+    use_authtok = false;
+    card_only = false;
+    wait_for_card = false;
+    
+    pkcs11_module opensc {
+        module = /usr/lib64/pkcs11/libsofthsm2.so;
+        description = "SoftHSM PKCS#11 library";
+        slot_num = 0;
+        support_threads = false;
+        ca_dir = /etc/pam_pkcs11/cacerts;
+        crl_dir = /etc/pam_pkcs11/crls;
+        cert_policy = ca,signature;
+    }
+    
+    mapper ms {
+        debug = false;
+        module = /usr/lib64/pam_pkcs11/subject_mapping.so;
+        ignorecase = false;
+        mapfile = /etc/pam_pkcs11/subject_mapping;
+    }
+}
+EOF
+Create certificate directories:
+mkdir -p /etc/pam_pkcs11/cacerts /etc/pam_pkcs11/crls
+Copy CA certificate to PAM directory:
+cp ca-cert.pem /etc/pam_pkcs11/cacerts/
+Create subject mapping file:
+echo "testuser -> testuser" > /etc/pam_pkcs11/subject_mapping
+Subtask 3.3: Test Smart Card Authentication
+Test PKCS#11 token access:
+pkcs11-tool --module /usr/lib64/pkcs11/libsofthsm2.so --list-objects --pin 1234
+Test certificate verification:
+pkcs11-tool --module /usr/lib64/pkcs11/libsofthsm2.so --list-certificates --pin 1234
+Create a test authentication script:
+cat > /root/test-smartcard-auth.sh << 'EOF'
+#!/bin/bash
+echo "Testing Smart Card Authentication..."
+
+# Test with pklogin_finder
+echo "Checking certificate mapping..."
+/usr/lib64/pam_pkcs11/pklogin_finder debug
+
+# Test authentication
+echo "Testing authentication (this is a simulation)..."
+echo "In a real environment, you would:"
+echo "1. Insert smart card"
+echo "2. Run: ssh -o PreferredAuthentications=publickey testuser@localhost"
+echo "3. Enter PIN when prompted"
+
+echo "Smart card authentication test completed."
+EOF
+Make the script executable and run it:
+chmod +x /root/test-smartcard-auth.sh
+./test-smartcard-auth.sh
+Subtask 3.4: Verify Smart Card Configuration
+Check smart card reader status:
+opensc-tool --list-readers
+Verify certificate chain:
+openssl verify -CAfile ca-cert.pem testuser-cert.pem
+Test PKCS#11 functionality:
+p11tool --list-all --provider=/usr/lib64/pkcs11/libsofthsm2.so
+Check PAM configuration:
+authselect current
+Troubleshooting Common Issues
+Issue 1: PC/SC Daemon Not Starting
+Problem: pcscd service fails to start Solution:
+
+# Check for conflicting processes
+ps aux | grep pcscd
+# Kill any existing processes
+pkill pcscd
+# Restart the service
+systemctl restart pcscd
+Issue 2: Certificate Import Fails
+Problem: Cannot import certificate to smart card Solution:
+
+# Check token status
+softhsm2-util --show-slots
+# Reinitialize if necessary
+softhsm2-util --init-token --slot 0 --label "TestCard" --so-pin 123456 --pin 1234 --force
+Issue 3: Authentication Fails
+Problem: Smart card authentication is rejected Solution:
+
+# Check certificate validity
+openssl x509 -in testuser-cert.pem -text -noout
+# Verify subject mapping
+cat /etc/pam_pkcs11/subject_mapping
+# Check PAM logs
+journalctl -u systemd-logind | tail -20
+Verification Steps
+Verify middleware installation:
+rpm -qa | grep -E "(pcsc|opensc)" | wc -l
+This should return a number greater than 0.
+
+Check service status:
+systemctl is-active pcscd
+This should return "active".
+
+Verify certificate creation:
+ls -la /root/smartcard-certs/*.pem | wc -l
+This should show multiple certificate files.
+
+Test token functionality:
+softhsm2-util --show-slots | grep -c "TestCard"
+This should return 1.
+
+Conclusion
+In this lab, you have successfully:
+
+• Installed and configured smart card middleware including PC/SC daemon, OpenSC, and related tools • Set up a complete smart card authentication infrastructure in Red Hat Identity Management • Created and managed digital certificates for smart card authentication • Configured PAM (Pluggable Authentication Modules) to support smart card login • Tested smart card authentication using software token simulation
+
+Why This Matters: Smart card authentication provides a significant security enhancement over traditional password-based authentication. By requiring both something you have (the smart card) and something you know (the PIN), it implements true multi-factor authentication. This is crucial for:
+
+• High-security environments where strong authentication is mandatory • Compliance requirements such as FIPS 140-2 or Common Criteria • Enterprise security policies that require multi-factor authentication • Protection against password-based attacks like brute force and credential theft
+
+The skills you've learned in this lab are directly applicable to real-world enterprise environments where smart card authentication is becoming increasingly common for securing access to critical systems and data.
+
+Next Steps: In production environments, you would integrate this with physical smart card readers and actual smart cards, configure certificate enrollment processes, and implement comprehensive certificate lifecycle management.
