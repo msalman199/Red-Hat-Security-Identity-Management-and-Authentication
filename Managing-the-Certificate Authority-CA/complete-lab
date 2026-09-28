@@ -1,0 +1,228 @@
+Lab 7: Managing the Certificate Authority (CA)
+Objectives
+By the end of this lab, students will be able to:
+
+Configure and manage the integrated Certificate Authority (CA) within Red Hat Identity Management (IdM)
+Issue and manage digital certificates using the ipa cert-request command
+Implement and test certificate-based authentication for secure communications
+Understand the role of PKI (Public Key Infrastructure) in enterprise security
+Troubleshoot common certificate-related issues in an IdM environment
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Red Hat Identity Management (IdM) concepts
+Knowledge of public key cryptography fundamentals
+Understanding of SSL/TLS certificate concepts
+Completion of previous IdM labs (user management, group management)
+Basic text editor skills (vi/vim or nano)
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or install software.
+
+Your lab environment includes:
+
+Red Hat Enterprise Linux 9 server with IdM already installed
+Pre-configured network settings
+Administrative access to the IdM server
+All necessary packages and dependencies
+Task 1: Configure the IdM Certificate Authority
+Subtask 1.1: Verify IdM CA Installation Status
+First, let's check if the Certificate Authority is properly installed and running within your IdM environment.
+
+Connect to your IdM server using the provided credentials
+
+Check the CA installation status:
+
+sudo ipa-ca-install --help
+Verify CA services are running:
+sudo systemctl status pki-tomcatd@pki-tomcat.service
+sudo systemctl status ipa.service
+Check CA certificate information:
+sudo ipa ca-show ipa
+Subtask 1.2: Configure CA Settings
+View current CA configuration:
+sudo ipa config-show | grep -i ca
+Check certificate profiles available:
+sudo ipa certprofile-find
+View the default certificate profile:
+sudo ipa certprofile-show caIPAserviceCert
+Subtask 1.3: Verify CA Certificate Chain
+Display the CA certificate:
+sudo openssl x509 -in /etc/ipa/ca.crt -text -noout
+Check certificate validity:
+sudo openssl x509 -in /etc/ipa/ca.crt -noout -dates
+Verify certificate chain:
+sudo ipa cert-show 1
+Task 2: Issue and Manage Certificates Using ipa cert-request
+Subtask 2.1: Create a Service Principal for Certificate Request
+Create a new service principal:
+sudo ipa service-add HTTP/webserver.example.com
+Verify the service was created:
+sudo ipa service-show HTTP/webserver.example.com
+Subtask 2.2: Generate a Private Key and Certificate Signing Request (CSR)
+Create a directory for certificate files:
+mkdir ~/certificates
+cd ~/certificates
+Generate a private key:
+openssl genrsa -out webserver.key 2048
+Create a certificate signing request:
+openssl req -new -key webserver.key -out webserver.csr -subj "/CN=webserver.example.com/O=Example Organization/C=US"
+Verify the CSR content:
+openssl req -in webserver.csr -text -noout
+Subtask 2.3: Request Certificate from IdM CA
+Submit certificate request to IdM CA:
+sudo ipa cert-request webserver.csr --principal=HTTP/webserver.example.com
+Note the certificate serial number from the output (you'll need this for management)
+
+Retrieve the issued certificate:
+
+sudo ipa cert-show <SERIAL_NUMBER> --out=webserver.crt
+Replace <SERIAL_NUMBER> with the actual serial number from step 1.
+
+Subtask 2.4: Verify the Issued Certificate
+Check certificate details:
+openssl x509 -in webserver.crt -text -noout
+Verify certificate against CA:
+openssl verify -CAfile /etc/ipa/ca.crt webserver.crt
+Check certificate expiration:
+openssl x509 -in webserver.crt -noout -dates
+Subtask 2.5: Manage Certificate Lifecycle
+List all certificates:
+sudo ipa cert-find
+Search for certificates by service:
+sudo ipa cert-find --service=HTTP/webserver.example.com
+Put certificate on hold (revoke temporarily):
+sudo ipa cert-revoke <SERIAL_NUMBER> --revocation-reason=6
+Remove hold from certificate:
+sudo ipa cert-remove-hold <SERIAL_NUMBER>
+Task 3: Test Certificate-Based Authentication
+Subtask 3.1: Configure Apache Web Server for SSL
+Install Apache web server:
+sudo dnf install httpd mod_ssl -y
+Create SSL configuration directory:
+sudo mkdir -p /etc/httpd/ssl
+Copy certificate files to Apache directory:
+sudo cp ~/certificates/webserver.crt /etc/httpd/ssl/
+sudo cp ~/certificates/webserver.key /etc/httpd/ssl/
+sudo cp /etc/ipa/ca.crt /etc/httpd/ssl/
+Set proper permissions:
+sudo chmod 600 /etc/httpd/ssl/webserver.key
+sudo chmod 644 /etc/httpd/ssl/webserver.crt
+sudo chmod 644 /etc/httpd/ssl/ca.crt
+Subtask 3.2: Configure SSL Virtual Host
+Create SSL configuration file:
+sudo tee /etc/httpd/conf.d/ssl-webserver.conf << 'EOF'
+<VirtualHost *:443>
+    ServerName webserver.example.com
+    DocumentRoot /var/www/html
+    
+    SSLEngine on
+    SSLCertificateFile /etc/httpd/ssl/webserver.crt
+    SSLCertificateKeyFile /etc/httpd/ssl/webserver.key
+    SSLCACertificateFile /etc/httpd/ssl/ca.crt
+    
+    SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1
+    SSLCipherSuite ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+    
+    LogLevel warn
+    ErrorLog logs/ssl_error_log
+    TransferLog logs/ssl_access_log
+</VirtualHost>
+EOF
+Create a test web page:
+sudo tee /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Certificate Test Page</title>
+</head>
+<body>
+    <h1>SSL Certificate Test</h1>
+    <p>If you can see this page over HTTPS, your certificate is working correctly!</p>
+    <p>Server: webserver.example.com</p>
+</body>
+</html>
+EOF
+Subtask 3.3: Start and Test Web Server
+Start Apache service:
+sudo systemctl start httpd
+sudo systemctl enable httpd
+Check service status:
+sudo systemctl status httpd
+Open firewall ports:
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+Subtask 3.4: Test Certificate-Based Authentication
+Add hostname to /etc/hosts (for testing purposes):
+echo "127.0.0.1 webserver.example.com" | sudo tee -a /etc/hosts
+Test HTTPS connection with curl:
+curl -k https://webserver.example.com
+Test certificate validation:
+curl --cacert /etc/ipa/ca.crt https://webserver.example.com
+Check certificate details via OpenSSL:
+echo | openssl s_client -connect webserver.example.com:443 -servername webserver.example.com 2>/dev/null | openssl x509 -noout -text
+Subtask 3.5: Test Certificate Revocation
+Revoke the certificate:
+sudo ipa cert-revoke <SERIAL_NUMBER> --revocation-reason=1
+Check certificate status:
+sudo ipa cert-show <SERIAL_NUMBER>
+Test that revoked certificate is no longer valid:
+curl --cacert /etc/ipa/ca.crt https://webserver.example.com
+The connection should fail or show certificate errors.
+
+Troubleshooting Common Issues
+Issue 1: Certificate Request Fails
+Problem: ipa cert-request command fails with permission errors.
+
+Solution:
+
+# Ensure you have proper Kerberos ticket
+kinit admin
+# Verify service principal exists
+sudo ipa service-show HTTP/webserver.example.com
+Issue 2: Apache Won't Start with SSL
+Problem: Apache fails to start after SSL configuration.
+
+Solution:
+
+# Check Apache configuration syntax
+sudo httpd -t
+# Check SSL certificate files permissions
+ls -la /etc/httpd/ssl/
+# Review error logs
+sudo tail -f /var/log/httpd/error_log
+Issue 3: Certificate Validation Fails
+Problem: Browser or curl shows certificate validation errors.
+
+Solution:
+
+# Verify certificate chain
+openssl verify -CAfile /etc/ipa/ca.crt /etc/httpd/ssl/webserver.crt
+# Check certificate dates
+openssl x509 -in /etc/httpd/ssl/webserver.crt -noout -dates
+# Ensure hostname matches certificate CN
+openssl x509 -in /etc/httpd/ssl/webserver.crt -noout -subject
+Key Concepts Summary
+Certificate Authority (CA): A trusted entity that issues digital certificates
+Certificate Signing Request (CSR): A request sent to a CA to obtain a digital certificate
+Public Key Infrastructure (PKI): Framework for managing digital certificates and public-key encryption
+Certificate Revocation: Process of invalidating a certificate before its expiration date
+SSL/TLS: Protocols that provide secure communication over networks
+Conclusion
+In this lab, you have successfully:
+
+Configured the IdM Certificate Authority - You learned how to verify and manage the integrated CA within Red Hat Identity Management, understanding its role in enterprise security infrastructure.
+
+Issued and managed certificates - You mastered the process of creating certificate signing requests, submitting them to the IdM CA using ipa cert-request, and managing the certificate lifecycle including revocation and hold operations.
+
+Implemented certificate-based authentication - You configured a real-world scenario using Apache web server with SSL certificates, demonstrating how certificates enable secure communications in enterprise environments.
+
+This knowledge is crucial for enterprise security because certificates form the foundation of secure communications in modern IT infrastructure. Understanding how to manage a Certificate Authority allows you to:
+
+Secure web services and applications
+Enable encrypted communications between systems
+Implement strong authentication mechanisms
+Maintain compliance with security standards
+Troubleshoot certificate-related issues in production environments
+The skills you've developed in this lab are directly applicable to real-world scenarios where organizations need to secure their communications and authenticate services reliably. Certificate management is a critical component of any comprehensive security strategy, and mastering these concepts will make you valuable in roles involving system administration, security engineering, and DevOps.
