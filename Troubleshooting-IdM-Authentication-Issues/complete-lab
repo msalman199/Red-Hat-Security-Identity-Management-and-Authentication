@@ -1,0 +1,436 @@
+Lab 16: Troubleshooting IdM Authentication Issues
+Objectives
+By the end of this lab, students will be able to:
+
+Analyze IdM authentication logs to identify common failure patterns
+Diagnose and resolve authentication failures using systematic troubleshooting approaches
+Troubleshoot DNS-related issues that affect IdM authentication
+Resolve Kerberos authentication problems in IdM environments
+Implement preventive measures to avoid common authentication issues
+Use IdM diagnostic tools to validate system health and configuration
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Identity Management (IdM) concepts
+Knowledge of DNS fundamentals
+Understanding of Kerberos authentication principles
+Experience with log file analysis
+Basic networking troubleshooting skills
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with IdM already installed and configured. Simply click Start Lab to access your environment - no need to build your own VM or install software.
+
+Your lab environment includes:
+
+CentOS/RHEL 8 or 9 server with IdM server installed
+Pre-configured IdM domain with sample users
+Client machines for testing authentication
+All necessary tools and utilities pre-installed
+Task 1: Analyzing IdM Authentication Logs
+Subtask 1.1: Understanding IdM Log Structure
+First, let's explore the IdM logging structure and identify key log files.
+
+Connect to your IdM server and examine the log directory structure:
+sudo ls -la /var/log/ipa/
+Identify the main log files used for authentication troubleshooting:
+sudo ls -la /var/log/ipa/ | grep -E "(install|server|client|krb5kdc)"
+Check the current log rotation settings:
+sudo cat /etc/logrotate.d/ipa
+Subtask 1.2: Monitoring Real-Time Authentication Events
+Open multiple terminal sessions to monitor logs in real-time:
+# Terminal 1 - Monitor main IPA server log
+sudo tail -f /var/log/ipa/ipaserver-install.log
+
+# Terminal 2 - Monitor Kerberos KDC log
+sudo tail -f /var/log/krb5kdc.log
+
+# Terminal 3 - Monitor system authentication log
+sudo tail -f /var/log/secure
+Generate authentication events by attempting to authenticate:
+# From another terminal or client machine
+kinit testuser@EXAMPLE.COM
+Analyze the log entries and identify the authentication flow patterns.
+Subtask 1.3: Parsing Authentication Failure Logs
+Create a script to extract authentication failures:
+sudo nano /usr/local/bin/ipa-auth-failures.sh
+Add the following content:
+
+#!/bin/bash
+# IPA Authentication Failure Analysis Script
+
+echo "=== IPA Authentication Failures Analysis ==="
+echo "Date Range: Last 24 hours"
+echo
+
+# Check for authentication failures in secure log
+echo "--- Authentication Failures from /var/log/secure ---"
+sudo grep -i "authentication failure" /var/log/secure | tail -20
+
+echo
+echo "--- Kerberos Authentication Failures ---"
+sudo grep -i "FAILED" /var/log/krb5kdc.log | tail -20
+
+echo
+echo "--- LDAP Bind Failures ---"
+sudo grep -i "bind failed" /var/log/dirsrv/slapd-*/access | tail -10
+
+echo
+echo "--- Recent Failed Login Attempts ---"
+sudo lastb | head -10
+Make the script executable and run it:
+sudo chmod +x /usr/local/bin/ipa-auth-failures.sh
+sudo /usr/local/bin/ipa-auth-failures.sh
+Task 2: Troubleshooting Common IdM Authentication Issues
+Subtask 2.1: Diagnosing Password-Related Issues
+Check user account status for authentication failures:
+# Check if user account is locked
+sudo ipa user-show testuser --all
+
+# Check password expiration
+sudo ipa pwpolicy-show
+Create a test scenario with expired password:
+# Set password to expire immediately for testing
+sudo ipa user-mod testuser --password-expiration=$(date -d "yesterday" +%Y%m%d%H%M%S)Z
+
+# Attempt authentication
+kinit testuser@EXAMPLE.COM
+Resolve password expiration issues:
+# Reset password expiration
+sudo ipa user-mod testuser --password-expiration=""
+
+# Force password change on next login
+sudo ipa user-mod testuser --password-expiration=$(date -d "tomorrow" +%Y%m%d%H%M%S)Z
+Subtask 2.2: Troubleshooting Account Lockout Issues
+Check account lockout policy:
+sudo ipa pwpolicy-show --all
+Simulate account lockout by multiple failed attempts:
+# Create a script to simulate failed logins
+for i in {1..6}; do
+    echo "wrongpassword" | kinit testuser@EXAMPLE.COM 2>/dev/null
+    echo "Attempt $i completed"
+    sleep 1
+done
+Check if account is locked:
+sudo ipa user-status testuser
+Unlock the account:
+sudo ipa user-unlock testuser
+Subtask 2.3: Resolving Certificate-Related Authentication Issues
+Check IdM server certificates:
+# Check certificate validity
+sudo ipa-getcert list
+
+# Check certificate expiration
+sudo openssl x509 -in /var/lib/ipa/certs/httpd.crt -text -noout | grep -A2 "Validity"
+Verify certificate trust:
+# Check if CA certificate is properly installed
+sudo certutil -L -d /etc/pki/nssdb/
+
+# Verify certificate chain
+sudo openssl verify -CAfile /etc/ipa/ca.crt /var/lib/ipa/certs/httpd.crt
+Renew certificates if needed:
+# Request certificate renewal
+sudo ipa-getcert resubmit -i <request_id>
+
+# Check renewal status
+sudo ipa-getcert list -i <request_id>
+Task 3: Resolving DNS and Kerberos Issues
+Subtask 3.1: Diagnosing DNS Configuration Issues
+Verify DNS resolution for IdM services:
+# Check SRV records for Kerberos
+dig _kerberos._tcp.example.com SRV
+
+# Check SRV records for LDAP
+dig _ldap._tcp.example.com SRV
+
+# Verify A record for IdM server
+dig ipa.example.com A
+Create a DNS diagnostic script:
+sudo nano /usr/local/bin/ipa-dns-check.sh
+Add the following content:
+
+#!/bin/bash
+# IPA DNS Configuration Check Script
+
+DOMAIN="example.com"
+IPA_SERVER="ipa.example.com"
+
+echo "=== IPA DNS Configuration Check ==="
+echo
+
+echo "--- Checking DNS Server Configuration ---"
+cat /etc/resolv.conf
+
+echo
+echo "--- Checking Kerberos SRV Records ---"
+dig _kerberos._tcp.$DOMAIN SRV +short
+
+echo
+echo "--- Checking LDAP SRV Records ---"
+dig _ldap._tcp.$DOMAIN SRV +short
+
+echo
+echo "--- Checking IPA Server A Record ---"
+dig $IPA_SERVER A +short
+
+echo
+echo "--- Reverse DNS Lookup ---"
+IPA_IP=$(dig $IPA_SERVER A +short)
+dig -x $IPA_IP +short
+
+echo
+echo "--- Testing DNS Resolution Speed ---"
+time nslookup $IPA_SERVER >/dev/null
+Run the DNS diagnostic script:
+sudo chmod +x /usr/local/bin/ipa-dns-check.sh
+sudo /usr/local/bin/ipa-dns-check.sh
+Subtask 3.2: Troubleshooting Kerberos Configuration Issues
+Verify Kerberos configuration:
+# Check krb5.conf configuration
+sudo cat /etc/krb5.conf
+
+# Verify realm configuration
+sudo klist -k /etc/krb5.keytab
+Test Kerberos authentication manually:
+# Clear existing tickets
+kdestroy
+
+# Test kinit with verbose output
+kinit -V testuser@EXAMPLE.COM
+
+# Check ticket details
+klist -v
+Diagnose Kerberos time synchronization issues:
+# Check system time
+date
+
+# Check NTP synchronization
+sudo chrony sources -v
+
+# Compare time with KDC
+sudo ntpdate -q ipa.example.com
+Subtask 3.3: Resolving Network Connectivity Issues
+Test network connectivity to IdM services:
+# Test LDAP connectivity
+telnet ipa.example.com 389
+
+# Test LDAPS connectivity
+openssl s_client -connect ipa.example.com:636 -verify_return_error
+
+# Test Kerberos connectivity
+telnet ipa.example.com 88
+Check firewall configuration:
+# Check firewall status
+sudo firewall-cmd --state
+
+# List allowed services
+sudo firewall-cmd --list-services
+
+# Verify IPA services are allowed
+sudo firewall-cmd --list-services | grep -E "(freeipa|kerberos|ldap)"
+Create a comprehensive connectivity test script:
+sudo nano /usr/local/bin/ipa-connectivity-test.sh
+Add the following content:
+
+#!/bin/bash
+# IPA Connectivity Test Script
+
+IPA_SERVER="ipa.example.com"
+PORTS=(88 389 636 443 464)
+
+echo "=== IPA Connectivity Test ==="
+echo "Testing connectivity to: $IPA_SERVER"
+echo
+
+for port in "${PORTS[@]}"; do
+    echo -n "Testing port $port: "
+    if timeout 5 bash -c "echo >/dev/tcp/$IPA_SERVER/$port" 2>/dev/null; then
+        echo "OPEN"
+    else
+        echo "CLOSED/FILTERED"
+    fi
+done
+
+echo
+echo "--- Network Route to IPA Server ---"
+traceroute -n $IPA_SERVER | head -10
+
+echo
+echo "--- Ping Test ---"
+ping -c 3 $IPA_SERVER
+Run the connectivity test:
+sudo chmod +x /usr/local/bin/ipa-connectivity-test.sh
+sudo /usr/local/bin/ipa-connectivity-test.sh
+Advanced Troubleshooting Techniques
+Creating a Comprehensive Diagnostic Script
+Create a master diagnostic script that combines all troubleshooting checks:
+
+sudo nano /usr/local/bin/ipa-full-diagnostic.sh
+Add the following comprehensive script:
+
+#!/bin/bash
+# Comprehensive IPA Authentication Diagnostic Script
+
+LOG_FILE="/tmp/ipa-diagnostic-$(date +%Y%m%d-%H%M%S).log"
+
+echo "=== IPA Authentication Diagnostic Report ===" | tee $LOG_FILE
+echo "Generated on: $(date)" | tee -a $LOG_FILE
+echo "Hostname: $(hostname)" | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# System Information
+echo "--- System Information ---" | tee -a $LOG_FILE
+uname -a | tee -a $LOG_FILE
+cat /etc/redhat-release | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# IPA Server Status
+echo "--- IPA Server Status ---" | tee -a $LOG_FILE
+sudo ipactl status | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# DNS Configuration
+echo "--- DNS Configuration ---" | tee -a $LOG_FILE
+cat /etc/resolv.conf | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# Kerberos Configuration
+echo "--- Kerberos Configuration ---" | tee -a $LOG_FILE
+sudo klist -k /etc/krb5.keytab | head -10 | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# Recent Authentication Failures
+echo "--- Recent Authentication Failures ---" | tee -a $LOG_FILE
+sudo grep -i "authentication failure" /var/log/secure | tail -5 | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# Certificate Status
+echo "--- Certificate Status ---" | tee -a $LOG_FILE
+sudo ipa-getcert list | grep -E "(Request ID|status|expires)" | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+# Disk Space
+echo "--- Disk Space ---" | tee -a $LOG_FILE
+df -h | grep -E "(Filesystem|/var|/tmp)" | tee -a $LOG_FILE
+echo | tee -a $LOG_FILE
+
+echo "Diagnostic report saved to: $LOG_FILE"
+Make it executable and run:
+
+sudo chmod +x /usr/local/bin/ipa-full-diagnostic.sh
+sudo /usr/local/bin/ipa-full-diagnostic.sh
+Common Issues and Solutions
+Issue 1: Clock Skew Problems
+Symptoms: Authentication fails with time-related errors
+
+Solution:
+
+# Synchronize time with NTP
+sudo chrony makestep
+
+# Verify time synchronization
+sudo chrony sources -v
+
+# Restart Kerberos services
+sudo systemctl restart krb5kdc
+Issue 2: LDAP Connection Failures
+Symptoms: Cannot connect to LDAP directory
+
+Solution:
+
+# Check LDAP service status
+sudo systemctl status dirsrv@EXAMPLE-COM
+
+# Test LDAP connectivity
+ldapsearch -x -H ldap://ipa.example.com -b "dc=example,dc=com" "(objectclass=*)" | head -20
+
+# Restart directory service if needed
+sudo systemctl restart dirsrv@EXAMPLE-COM
+Issue 3: DNS Resolution Problems
+Symptoms: Cannot resolve IdM server hostname
+
+Solution:
+
+# Add IdM server to /etc/hosts temporarily
+echo "192.168.1.100 ipa.example.com" | sudo tee -a /etc/hosts
+
+# Fix DNS configuration
+sudo nmcli con mod "System eth0" ipv4.dns "192.168.1.100"
+sudo nmcli con up "System eth0"
+Preventive Measures
+Setting Up Monitoring
+Create a monitoring script for authentication health:
+sudo nano /usr/local/bin/ipa-health-monitor.sh
+#!/bin/bash
+# IPA Health Monitoring Script
+
+ALERT_EMAIL="admin@example.com"
+LOG_FILE="/var/log/ipa-health.log"
+
+# Check IPA services
+if ! sudo ipactl status >/dev/null 2>&1; then
+    echo "$(date): IPA services are down" >> $LOG_FILE
+    # Send alert (configure mail system as needed)
+fi
+
+# Check certificate expiration (30 days warning)
+CERT_EXPIRY=$(sudo openssl x509 -in /var/lib/ipa/certs/httpd.crt -noout -dates | grep notAfter | cut -d= -f2)
+EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s)
+CURRENT_EPOCH=$(date +%s)
+DAYS_UNTIL_EXPIRY=$(( (EXPIRY_EPOCH - CURRENT_EPOCH) / 86400 ))
+
+if [ $DAYS_UNTIL_EXPIRY -lt 30 ]; then
+    echo "$(date): Certificate expires in $DAYS_UNTIL_EXPIRY days" >> $LOG_FILE
+fi
+
+# Check disk space
+DISK_USAGE=$(df /var | tail -1 | awk '{print $5}' | sed 's/%//')
+if [ $DISK_USAGE -gt 80 ]; then
+    echo "$(date): Disk usage is at ${DISK_USAGE}%" >> $LOG_FILE
+fi
+Set up a cron job for regular monitoring:
+# Add to crontab
+echo "0 */6 * * * /usr/local/bin/ipa-health-monitor.sh" | sudo crontab -
+Lab Validation
+Verification Steps
+Test authentication after troubleshooting:
+# Clear any existing tickets
+kdestroy
+
+# Test user authentication
+kinit testuser@EXAMPLE.COM
+
+# Verify ticket was obtained
+klist
+
+# Test web interface access
+curl -k --negotiate -u : https://ipa.example.com/ipa/ui/
+Validate DNS resolution:
+# Verify all SRV records resolve correctly
+dig _kerberos._tcp.example.com SRV
+dig _ldap._tcp.example.com SRV
+Confirm certificate validity:
+# Check certificate status
+sudo ipa-getcert list | grep -E "(status|expires)"
+Conclusion
+In this lab, you have successfully learned how to troubleshoot IdM authentication issues systematically. You have gained hands-on experience with:
+
+Log Analysis: You learned to identify and analyze authentication failures using various log files in /var/log/ipa/, /var/log/secure, and Kerberos logs.
+
+Common Issue Resolution: You practiced resolving typical authentication problems including password expiration, account lockouts, and certificate issues.
+
+DNS and Kerberos Troubleshooting: You developed skills to diagnose and fix DNS resolution problems and Kerberos configuration issues that commonly affect IdM authentication.
+
+Diagnostic Tools: You created and used comprehensive diagnostic scripts that can be reused in production environments to quickly identify authentication problems.
+
+Preventive Monitoring: You implemented monitoring solutions to proactively detect potential authentication issues before they impact users.
+
+These troubleshooting skills are essential for maintaining a healthy IdM environment and ensuring reliable authentication services for your organization. The systematic approach and diagnostic scripts you've developed will serve as valuable tools in your identity management toolkit.
+
+Key Takeaways:
+
+Always check logs first when troubleshooting authentication issues
+DNS configuration is critical for IdM functionality
+Time synchronization is essential for Kerberos authentication
+Regular monitoring can prevent many authentication problems
+Systematic troubleshooting approaches save time and ensure thorough problem resolution
+The knowledge gained in this lab directly applies to real-world IdM deployments and prepares you for advanced identity management scenarios in enterprise environments.
