@@ -1,0 +1,331 @@
+Lab 12: Implementing Two-Factor Authentication (2FA)
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the importance of two-factor authentication in identity management
+Install and configure FreeOTP/TOTP-based 2FA services on Red Hat Identity Management (IdM)
+Implement and enforce 2FA policies for users in IdM
+Test and validate the 2FA authentication process
+Troubleshoot common 2FA implementation issues
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Red Hat Identity Management (IdM) concepts
+Knowledge of user management in Linux environments
+Understanding of authentication and authorization principles
+Completed previous labs on IdM basic configuration
+Required Knowledge Areas:
+Linux system administration basics
+LDAP directory services concepts
+PKI and certificate management fundamentals
+Network security principles
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or configure base systems.
+
+Lab Environment Details:
+Operating System: Red Hat Enterprise Linux 8/9
+Pre-installed Software: FreeIPA/IdM Server
+Network Configuration: Isolated lab network
+Access Method: SSH and Web UI access provided
+Task 1: Install and Configure 2FA Service
+Subtask 1.1: Verify IdM Server Status
+First, let's ensure our IdM server is running properly and check the current authentication methods.
+
+# Check IdM server status
+sudo systemctl status ipa
+
+# Verify IdM services are running
+sudo ipactl status
+
+# Check current authentication methods
+kinit admin
+ipa config-show | grep -i auth
+Subtask 1.2: Install Required 2FA Packages
+Install the necessary packages for OTP (One-Time Password) support in IdM.
+
+# Install OTP-related packages
+sudo dnf install -y freeipa-server-trust-ad python3-qrcode
+
+# Verify installation
+rpm -qa | grep -i otp
+Subtask 1.3: Enable OTP Support in IdM
+Configure IdM to support OTP tokens for two-factor authentication.
+
+# Authenticate as admin
+kinit admin
+
+# Check if OTP is already enabled
+ipa otpconfig-show
+
+# If not configured, set up basic OTP configuration
+ipa otpconfig-mod --hotp-window=10 --totp-window=5
+Subtask 1.4: Configure RADIUS Support (Optional)
+For enhanced 2FA capabilities, configure RADIUS support.
+
+# Install FreeRADIUS packages
+sudo dnf install -y freeradius freeradius-utils
+
+# Configure basic RADIUS settings
+sudo systemctl enable radiusd
+sudo systemctl start radiusd
+
+# Verify RADIUS is running
+sudo systemctl status radiusd
+Task 2: Enforce 2FA Policies for Users
+Subtask 2.1: Create Test Users
+Create test users to demonstrate 2FA functionality.
+
+# Create test users
+ipa user-add testuser1 --first=Test --last=User1 --password
+
+ipa user-add testuser2 --first=Test --last=User2 --password
+
+# Verify users were created
+ipa user-find test*
+Subtask 2.2: Configure Global 2FA Policy
+Set up global authentication policies requiring 2FA.
+
+# Create a new authentication indicator policy
+ipa pwpolicy-add global_2fa_policy --maxlife=90 --minlife=1
+
+# View current password policies
+ipa pwpolicy-find
+Subtask 2.3: Create User Authentication Types
+Configure different authentication types for users.
+
+# Set user authentication type to require OTP
+ipa user-mod testuser1 --user-auth-type=otp
+
+# Set user authentication type to require both password and OTP
+ipa user-mod testuser2 --user-auth-type=password --user-auth-type=otp
+
+# Verify authentication types
+ipa user-show testuser1 | grep -i auth
+ipa user-show testuser2 | grep -i auth
+Subtask 2.4: Create Host-Based Authentication Policy
+Configure host-based authentication policies for enhanced security.
+
+# Create HBAC rule for 2FA users
+ipa hbacrule-add secure_hosts_2fa
+
+# Add users to the rule
+ipa hbacrule-add-user secure_hosts_2fa --users=testuser1,testuser2
+
+# Add hosts to the rule (use your current hostname)
+HOSTNAME=$(hostname)
+ipa hbacrule-add-host secure_hosts_2fa --hosts=$HOSTNAME
+
+# Add services to the rule
+ipa hbacrule-add-service secure_hosts_2fa --hbacsvcs=sshd
+
+# Verify the rule
+ipa hbacrule-show secure_hosts_2fa
+Task 3: Test the 2FA Authentication Process
+Subtask 3.1: Generate OTP Tokens for Users
+Create OTP tokens that users can add to their authenticator apps.
+
+# Generate OTP token for testuser1
+ipa otptoken-add --owner=testuser1 --desc="TestUser1 Mobile Token"
+
+# The command will output a QR code and URI - save this information
+# Example output will show: URI and QR code for scanning
+
+# Generate OTP token for testuser2
+ipa otptoken-add --owner=testuser2 --desc="TestUser2 Mobile Token"
+Subtask 3.2: Set Up Mobile Authenticator App Simulation
+Since we're in a lab environment, we'll simulate the mobile app using command-line tools.
+
+# Install oath-toolkit for generating TOTP codes
+sudo dnf install -y oathtool
+
+# Extract the secret key from the OTP token (you'll need the actual secret from the previous step)
+# This is typically shown in the URI as secret=XXXXX
+
+# Example of generating TOTP code (replace SECRET_KEY with actual secret)
+# oathtool --totp -b SECRET_KEY
+
+# List OTP tokens to get details
+ipa otptoken-find --owner=testuser1
+Subtask 3.3: Test SSH Authentication with 2FA
+Test the 2FA authentication process using SSH.
+
+# First, ensure SSH is configured for 2FA
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+
+# Configure SSH for 2FA
+sudo tee -a /etc/ssh/sshd_config << EOF
+
+# 2FA Configuration
+ChallengeResponseAuthentication yes
+AuthenticationMethods publickey,keyboard-interactive:pam
+UsePAM yes
+EOF
+
+# Restart SSH service
+sudo systemctl restart sshd
+
+# Test authentication from another terminal or session
+# ssh testuser1@localhost
+# You will be prompted for both password and OTP code
+Subtask 3.4: Test Web UI Authentication
+Test 2FA through the IdM web interface.
+
+# Get the IdM server URL
+echo "IdM Web UI URL: https://$(hostname)/ipa/ui/"
+
+# Open web browser and navigate to the URL
+# Login with testuser1 credentials
+# You should be prompted for OTP code after password
+Subtask 3.5: Generate and Test OTP Codes
+Generate OTP codes for testing authentication.
+
+# List tokens to get the secret key
+ipa otptoken-find --owner=testuser1 --all
+
+# Generate current TOTP code (replace with actual secret)
+# SECRET_KEY="your_actual_secret_key_here"
+# TOTP_CODE=$(oathtool --totp -b $SECRET_KEY)
+# echo "Current TOTP code: $TOTP_CODE"
+
+# Test kinit with OTP
+# kinit testuser1
+# Enter password + TOTP code when prompted
+Advanced Configuration
+Subtask 3.6: Configure Token Synchronization
+Set up token synchronization for better user experience.
+
+# Configure token sync window
+ipa otpconfig-mod --totp-sync-window=10
+
+# Allow token resynchronization
+ipa otpconfig-mod --hotp-sync-window=100
+
+# View current OTP configuration
+ipa otpconfig-show
+Subtask 3.7: Set Up Backup Tokens
+Create backup tokens for users in case their primary device is unavailable.
+
+# Create backup token for testuser1
+ipa otptoken-add --owner=testuser1 --desc="TestUser1 Backup Token" --type=hotp
+
+# Generate backup codes (static tokens)
+for i in {1..5}; do
+    ipa otptoken-add --owner=testuser1 --desc="Backup Code $i" --type=hotp
+done
+
+# List all tokens for user
+ipa otptoken-find --owner=testuser1
+Troubleshooting Common Issues
+Issue 1: OTP Token Not Working
+# Check token status
+ipa otptoken-find --owner=testuser1
+
+# Verify time synchronization
+sudo chrony sources -v
+
+# Check OTP configuration
+ipa otpconfig-show
+
+# Reset token if needed
+ipa otptoken-mod TOKEN_UUID --disabled=False
+Issue 2: SSH Authentication Failing
+# Check SSH configuration
+sudo sshd -T | grep -i challenge
+
+# Verify PAM configuration
+sudo cat /etc/pam.d/sshd | grep -i otp
+
+# Check SSH logs
+sudo journalctl -u sshd -f
+Issue 3: Time Synchronization Issues
+# Check system time
+timedatectl status
+
+# Synchronize time
+sudo chrony makestep
+
+# Verify NTP synchronization
+chrony sources
+Verification and Testing
+Final Verification Steps
+# Verify 2FA is working for all test users
+echo "Testing 2FA for testuser1..."
+# kinit testuser1 (should prompt for password + OTP)
+
+echo "Testing 2FA for testuser2..."
+# kinit testuser2 (should prompt for password + OTP)
+
+# Check authentication logs
+sudo journalctl -u sssd -n 20
+
+# Verify OTP tokens are active
+ipa otptoken-find --all
+Performance Testing
+# Test multiple concurrent authentications
+for user in testuser1 testuser2; do
+    echo "Testing concurrent auth for $user"
+    # Simulate multiple login attempts
+done
+
+# Monitor system resources during authentication
+top -p $(pgrep -d',' -f ipa)
+Security Best Practices
+Subtask 3.8: Implement Security Hardening
+# Set strong OTP policies
+ipa otpconfig-mod --totp-auth-window=1 --totp-sync-window=5
+
+# Configure account lockout policies
+ipa pwpolicy-mod --maxfail=3 --failinterval=300
+
+# Enable audit logging
+sudo systemctl enable rsyslog
+sudo systemctl start rsyslog
+
+# Configure log monitoring
+sudo tee /etc/rsyslog.d/50-ipa-2fa.conf << EOF
+# IPA 2FA Logging
+local4.*    /var/log/ipa-2fa.log
+EOF
+
+sudo systemctl restart rsyslog
+Cleanup and Documentation
+Lab Cleanup
+# Document current configuration
+ipa otpconfig-show > /tmp/otp-config-backup.txt
+ipa otptoken-find --all > /tmp/otp-tokens-backup.txt
+
+# Optional: Remove test users (if desired)
+# ipa user-del testuser1 testuser2
+
+# Backup configuration
+sudo cp -r /etc/ipa /tmp/ipa-config-backup
+Conclusion
+In this lab, you have successfully:
+
+Configured Two-Factor Authentication: Set up OTP-based 2FA in Red Hat Identity Management, enhancing security beyond traditional password-only authentication
+Implemented Security Policies: Created and enforced 2FA policies for users, ensuring that sensitive systems require multiple authentication factors
+Tested Authentication Flows: Validated 2FA functionality through multiple access methods including SSH and web interfaces
+Troubleshot Common Issues: Learned to identify and resolve typical 2FA implementation challenges
+Why This Matters
+Two-factor authentication is crucial in modern cybersecurity because:
+
+Enhanced Security: Significantly reduces the risk of unauthorized access even if passwords are compromised
+Compliance Requirements: Many security frameworks and regulations require multi-factor authentication
+User Trust: Demonstrates organizational commitment to protecting sensitive data and systems
+Risk Mitigation: Provides an additional security layer against various attack vectors including phishing and credential theft
+Real-World Applications
+The skills learned in this lab directly apply to:
+
+Enterprise Security: Implementing 2FA across corporate environments
+Cloud Security: Securing access to cloud-based resources and services
+Compliance: Meeting regulatory requirements for financial, healthcare, and government sectors
+Identity Management: Building comprehensive identity and access management solutions
+Next Steps
+To further enhance your identity management and security skills:
+
+Explore integration with external authentication providers (SAML, OAuth)
+Learn about risk-based authentication and adaptive security measures
+Study certificate-based authentication methods
+Investigate single sign-on (SSO) implementations with 2FA
+This lab provides a solid foundation for implementing robust authentication systems that protect against modern security threats while maintaining user accessibility and system performance.
