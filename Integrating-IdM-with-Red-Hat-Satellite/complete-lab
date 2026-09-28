@@ -1,0 +1,342 @@
+Lab 14: Integrating IdM with Red Hat Satellite
+Objectives
+By the end of this lab, students will be able to:
+
+Configure Red Hat Satellite to authenticate users through IdM (Identity Management)
+Enroll RHEL systems into Satellite using IdM credentials
+Verify the integration by provisioning systems via Satellite
+Understand the benefits of centralized identity management in enterprise environments
+Troubleshoot common integration issues between IdM and Satellite
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Enterprise Linux (RHEL) command line
+Knowledge of identity management concepts
+Understanding of system provisioning and configuration management
+Experience with SSH and basic networking concepts
+Completion of previous IdM labs or equivalent knowledge
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure complex networking.
+
+Your lab environment includes:
+
+satellite.example.com: Red Hat Satellite server (CentOS Stream 8)
+idm.example.com: IdM server (RHEL 8)
+client1.example.com: RHEL 8 client system
+client2.example.com: RHEL 8 client system
+All systems are pre-configured with necessary network connectivity and basic services.
+
+Task 1: Configure Red Hat Satellite to Use IdM for Authentication
+Subtask 1.1: Verify IdM Server Status
+First, let's ensure our IdM server is running properly and accessible.
+
+Connect to the IdM server:
+ssh root@idm.example.com
+Check IdM server status:
+ipactl status
+Verify IdM services are running:
+systemctl status ipa
+Test IdM web interface accessibility:
+curl -k https://idm.example.com/ipa/ui/
+Subtask 1.2: Prepare IdM for Satellite Integration
+Create a service account for Satellite in IdM:
+kinit admin
+ipa user-add satellite-service --first=Satellite --last=Service --password
+Create a dedicated group for Satellite administrators:
+ipa group-add satellite-admins --desc="Satellite Administrators"
+Add the service account to the group:
+ipa group-add-member satellite-admins --users=satellite-service
+Create additional test users:
+ipa user-add testuser1 --first=Test --last=User1 --password
+ipa user-add testuser2 --first=Test --last=User2 --password
+Subtask 1.3: Configure Satellite Server for IdM Authentication
+Connect to the Satellite server:
+ssh root@satellite.example.com
+Install required packages for LDAP integration:
+dnf install -y foreman-installer python3-ldap
+Configure Satellite to use IdM LDAP:
+satellite-installer \
+  --foreman-ipa-authentication=true \
+  --foreman-ipa-server=idm.example.com \
+  --foreman-ipa-realm=EXAMPLE.COM
+Verify Satellite configuration:
+satellite-maintain service status
+Subtask 1.4: Configure LDAP Authentication Settings
+Access Satellite web interface:
+
+Open browser to https://satellite.example.com
+Login with admin credentials
+Navigate to LDAP configuration:
+
+Go to Administer → Authentication Sources
+Click Create Auth Source
+Configure LDAP settings:
+
+# Use these settings in the web interface:
+# Name: IdM-LDAP
+# Host: idm.example.com
+# Port: 636
+# LDAPS: Yes
+# Account: uid=satellite-service,cn=users,cn=accounts,dc=example,dc=com
+# Base DN: cn=users,cn=accounts,dc=example,dc=com
+# Groups base DN: cn=groups,cn=accounts,dc=example,dc=com
+# LDAP filter: (objectClass=person)
+# Automatically create accounts: Yes
+Test LDAP connection:
+# From Satellite server command line
+ldapsearch -x -H ldaps://idm.example.com:636 \
+  -D "uid=satellite-service,cn=users,cn=accounts,dc=example,dc=com" \
+  -W -b "cn=users,cn=accounts,dc=example,dc=com" \
+  "(objectClass=person)"
+Task 2: Enroll RHEL Systems into Satellite Using IdM Credentials
+Subtask 2.1: Prepare Client Systems
+Connect to client1:
+ssh root@client1.example.com
+Install IdM client packages:
+dnf install -y ipa-client
+Join client1 to IdM domain:
+ipa-client-install \
+  --server=idm.example.com \
+  --domain=example.com \
+  --realm=EXAMPLE.COM \
+  --principal=admin \
+  --password=your_admin_password \
+  --unattended
+Verify IdM client enrollment:
+ipa-client-install --uninstall --unattended
+kinit admin
+klist
+Subtask 2.2: Install Satellite Client Tools
+Download Satellite client repository:
+curl -o katello-ca-consumer-latest.noarch.rpm \
+  https://satellite.example.com/pub/katello-ca-consumer-latest.noarch.rpm
+Install the repository package:
+rpm -Uvh katello-ca-consumer-latest.noarch.rpm
+Install Satellite client tools:
+dnf install -y katello-agent subscription-manager
+Subtask 2.3: Register Systems with Satellite
+Create activation key in Satellite (via web interface):
+
+Navigate to Content → Activation Keys
+Click Create Activation Key
+Name: rhel8-key
+Environment: Library
+Content View: Default Organization View
+Register client1 with Satellite:
+
+subscription-manager register \
+  --org="Default_Organization" \
+  --activationkey="rhel8-key" \
+  --serverurl=https://satellite.example.com:443/rhsm \
+  --baseurl=https://satellite.example.com/pulp/repos
+Verify registration:
+subscription-manager status
+subscription-manager list --installed
+Repeat the process for client2:
+ssh root@client2.example.com
+# Repeat steps 2.1 through 2.3 for client2
+Subtask 2.4: Configure Remote Execution
+On Satellite server, enable remote execution:
+satellite-installer --enable-foreman-plugin-remote-execution
+Configure SSH keys for remote execution:
+# Generate SSH key for foreman user
+sudo -u foreman ssh-keygen -t rsa -b 4096 -N '' \
+  -f /usr/share/foreman/.ssh/id_rsa
+Distribute SSH keys to clients:
+# Copy public key to clients
+ssh-copy-id -i /usr/share/foreman/.ssh/id_rsa.pub root@client1.example.com
+ssh-copy-id -i /usr/share/foreman/.ssh/id_rsa.pub root@client2.example.com
+Task 3: Verify Integration by Provisioning Systems via Satellite
+Subtask 3.1: Create Host Groups and Configuration
+Access Satellite web interface and navigate to Configure → Host Groups
+
+Create a new host group:
+
+# Host Group Settings:
+# Name: RHEL8-IdM-Integrated
+# Environment: production
+# Puppet Classes: (none for this lab)
+# Operating System: RedHat 8.x
+Configure host group parameters:
+# Add parameters in the web interface:
+# realm = EXAMPLE.COM
+# ipa_server = idm.example.com
+# enable_ipa_client = true
+Subtask 3.2: Test User Authentication
+Test IdM user login to Satellite:
+
+Logout from Satellite web interface
+Login using testuser1 credentials
+Verify access to appropriate resources
+Verify user permissions:
+
+# From Satellite server
+hammer user list
+hammer user info --login testuser1
+Test command line authentication:
+# Test API access with IdM credentials
+curl -u testuser1:password -k \
+  https://satellite.example.com/api/v2/hosts
+Subtask 3.3: Provision a New System
+Create a new host via Satellite web interface:
+
+Navigate to Hosts → Create Host
+Name: newclient.example.com
+Host Group: RHEL8-IdM-Integrated
+Deploy on: Bare Metal (simulated)
+Configure provisioning parameters:
+
+# Host Configuration:
+# Organization: Default Organization
+# Location: Default Location
+# Host Group: RHEL8-IdM-Integrated
+# Compute Resource: None (bare metal)
+# Provisioning Method: Network Based
+Generate provisioning script:
+# From Satellite server
+hammer host create \
+  --name="newclient.example.com" \
+  --hostgroup="RHEL8-IdM-Integrated" \
+  --organization="Default Organization" \
+  --location="Default Location" \
+  --build=true
+Subtask 3.4: Verify Automated IdM Integration
+Check that new hosts automatically join IdM:
+# On IdM server
+kinit admin
+ipa host-find
+Verify host certificates:
+# Check for host certificates in IdM
+ipa cert-find --subject="CN=newclient.example.com"
+Test remote execution on managed hosts:
+# From Satellite web interface or CLI
+hammer job-invocation create \
+  --job-template="Run Command - SSH Default" \
+  --inputs="command=hostname" \
+  --search-query="name ~ client"
+Subtask 3.5: Monitor and Validate Integration
+Check Satellite logs for IdM integration:
+tail -f /var/log/foreman/production.log | grep -i ldap
+Verify IdM authentication logs:
+# On IdM server
+tail -f /var/log/dirsrv/slapd-EXAMPLE-COM/access
+Test complete workflow:
+# Create a test job template
+hammer job-template create \
+  --name="IdM Status Check" \
+  --job-category="Commands" \
+  --provider-type="SSH" \
+  --template='ipa-client-install --uninstall --unattended; echo "IdM client status checked"'
+Execute the job on managed hosts:
+hammer job-invocation create \
+  --job-template="IdM Status Check" \
+  --search-query="hostgroup = RHEL8-IdM-Integrated"
+Troubleshooting Common Issues
+Issue 1: LDAP Connection Failures
+Symptoms: Users cannot authenticate via IdM Solution:
+
+# Check LDAP connectivity
+ldapsearch -x -H ldaps://idm.example.com:636 -b "dc=example,dc=com"
+
+# Verify certificates
+openssl s_client -connect idm.example.com:636 -showcerts
+
+# Check firewall rules
+firewall-cmd --list-all
+Issue 2: Host Registration Problems
+Symptoms: Clients cannot register with Satellite Solution:
+
+# Clean previous registrations
+subscription-manager clean
+
+# Check Satellite connectivity
+curl -k https://satellite.example.com/rhsm/status
+
+# Verify activation key
+hammer activation-key list
+Issue 3: Remote Execution Failures
+Symptoms: Jobs fail to execute on remote hosts Solution:
+
+# Check SSH connectivity
+sudo -u foreman ssh root@client1.example.com
+
+# Verify SSH keys
+ls -la /usr/share/foreman/.ssh/
+
+# Check remote execution settings
+hammer settings list | grep remote_execution
+Validation and Testing
+Comprehensive Integration Test
+Create a test script to validate the complete integration:
+#!/bin/bash
+# integration_test.sh
+
+echo "Testing IdM-Satellite Integration..."
+
+# Test 1: LDAP Authentication
+echo "1. Testing LDAP authentication..."
+ldapsearch -x -H ldaps://idm.example.com:636 \
+  -D "uid=satellite-service,cn=users,cn=accounts,dc=example,dc=com" \
+  -W -b "cn=users,cn=accounts,dc=example,dc=com" \
+  "(uid=testuser1)" | grep -q "testuser1"
+
+if [ $? -eq 0 ]; then
+    echo "   ✓ LDAP authentication working"
+else
+    echo "   ✗ LDAP authentication failed"
+fi
+
+# Test 2: Host Registration
+echo "2. Testing host registration..."
+subscription-manager status | grep -q "Overall Status: Current"
+
+if [ $? -eq 0 ]; then
+    echo "   ✓ Host registration successful"
+else
+    echo "   ✗ Host registration failed"
+fi
+
+# Test 3: Remote Execution
+echo "3. Testing remote execution..."
+hammer job-invocation create \
+  --job-template="Run Command - SSH Default" \
+  --inputs="command=echo 'Integration test successful'" \
+  --search-query="name = $(hostname)" \
+  --async
+
+echo "Integration test completed."
+Run the validation script:
+chmod +x integration_test.sh
+./integration_test.sh
+Conclusion
+In this lab, you have successfully:
+
+Configured Red Hat Satellite to authenticate users through IdM, creating a centralized identity management solution
+Enrolled RHEL systems into Satellite using IdM credentials, streamlining the system management process
+Verified the integration by provisioning systems via Satellite with automatic IdM enrollment
+Implemented automated workflows that combine identity management with configuration management
+Why This Integration Matters
+This integration provides several critical benefits for enterprise environments:
+
+Centralized Authentication: Users can access both IdM and Satellite resources with a single set of credentials
+Automated System Enrollment: New systems automatically join the IdM domain during Satellite provisioning
+Enhanced Security: Centralized certificate management and consistent security policies
+Operational Efficiency: Reduced administrative overhead through automation
+Compliance: Better audit trails and consistent policy enforcement
+Real-World Applications
+The skills you've learned apply directly to:
+
+Enterprise Infrastructure Management: Managing hundreds or thousands of RHEL systems
+DevOps Automation: Integrating identity management with CI/CD pipelines
+Security Compliance: Meeting regulatory requirements for access control and audit trails
+Hybrid Cloud Deployments: Managing systems across on-premises and cloud environments
+Next Steps
+To further develop your skills:
+
+Explore advanced Satellite features like content views and lifecycle environments
+Implement role-based access control (RBAC) with IdM groups
+Integrate with external authentication systems like Active Directory
+Automate certificate management and renewal processes
+Implement monitoring and alerting for the integrated environment
+This integration forms the foundation for modern, scalable enterprise Linux infrastructure management, combining the power of Red Hat Satellite's configuration management with IdM's robust identity services.
