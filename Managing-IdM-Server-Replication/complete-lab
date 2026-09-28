@@ -1,0 +1,407 @@
+Lab 18: Managing IdM Server Replication
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the concepts and benefits of IdM server replication
+Configure multiple IdM replicas for high availability and redundancy
+Test replication functionality and failover scenarios
+Monitor and verify replication status between IdM servers
+Troubleshoot common replication issues using ipa-replica-manage
+Implement best practices for IdM replication topology
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Identity Management (IdM) concepts
+Knowledge of DNS configuration and network connectivity
+Experience with command-line interface operations
+Understanding of LDAP and Kerberos authentication principles
+Completion of basic IdM server installation and configuration
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure complex networking.
+
+Your lab environment includes:
+
+idm-master: Primary IdM server (RHEL 8/9)
+idm-replica1: First replica server (RHEL 8/9)
+idm-replica2: Second replica server (RHEL 8/9)
+client1: Test client machine (RHEL 8/9)
+All machines are pre-configured with proper networking and basic system requirements.
+
+Task 1: Configure Multiple IdM Replicas for Redundancy
+Subtask 1.1: Verify Primary IdM Server Status
+First, let's ensure our primary IdM server is running properly and check its current status.
+
+Connect to the primary IdM server:
+ssh root@idm-master
+Check IdM server status:
+ipactl status
+Verify IdM server configuration:
+ipa config-show
+Check current topology:
+ipa topologysegment-find domain
+ipa topologysegment-find ca
+Verify DNS configuration:
+dig SRV _ldap._tcp.example.com
+dig SRV _kerberos._tcp.example.com
+Subtask 1.2: Prepare Replica Servers
+Before creating replicas, we need to prepare the target servers with proper hostnames, DNS, and network configuration.
+
+Connect to the first replica server:
+ssh root@idm-replica1
+Set proper hostname:
+hostnamectl set-hostname idm-replica1.example.com
+Update /etc/hosts file:
+cat >> /etc/hosts << EOF
+192.168.1.10 idm-master.example.com idm-master
+192.168.1.11 idm-replica1.example.com idm-replica1
+192.168.1.12 idm-replica2.example.com idm-replica2
+EOF
+Configure DNS to point to IdM master:
+echo "nameserver 192.168.1.10" > /etc/resolv.conf
+echo "search example.com" >> /etc/resolv.conf
+Install required packages:
+dnf install -y ipa-server ipa-server-dns
+Repeat steps 1-5 for the second replica server (idm-replica2).
+Subtask 1.3: Create the First IdM Replica
+Now we'll create our first replica server to provide redundancy for our IdM infrastructure.
+
+Return to the primary IdM server:
+ssh root@idm-master
+Authenticate as admin:
+kinit admin
+Create replica preparation file:
+ipa-replica-prepare idm-replica1.example.com --ip-address=192.168.1.11
+Copy the replica file to the target server:
+scp /var/lib/ipa/replica-info-idm-replica1.example.com.gpg root@idm-replica1:/tmp/
+Connect to the first replica server:
+ssh root@idm-replica1
+Install the replica:
+ipa-replica-install /tmp/replica-info-idm-replica1.example.com.gpg \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4
+Start and enable IdM services:
+ipactl start
+systemctl enable ipa
+Verify replica installation:
+ipactl status
+ipa-replica-conncheck --master idm-master.example.com
+Subtask 1.4: Create the Second IdM Replica
+Let's add a second replica for additional redundancy and load distribution.
+
+Return to the primary IdM server:
+ssh root@idm-master
+Create second replica preparation file:
+ipa-replica-prepare idm-replica2.example.com --ip-address=192.168.1.12
+Copy the replica file to the second target server:
+scp /var/lib/ipa/replica-info-idm-replica2.example.com.gpg root@idm-replica2:/tmp/
+Connect to the second replica server:
+ssh root@idm-replica2
+Install the second replica:
+ipa-replica-install /tmp/replica-info-idm-replica2.example.com.gpg \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4
+Start and enable IdM services:
+ipactl start
+systemctl enable ipa
+Subtask 1.5: Verify Replication Topology
+After creating both replicas, let's verify that our replication topology is properly configured.
+
+From any IdM server, check the topology:
+kinit admin
+ipa topologysegment-find domain
+Check CA replication topology:
+ipa topologysegment-find ca
+Verify all servers are reachable:
+ipa server-find
+Check replication agreements:
+ipa-replica-manage list
+Task 2: Test Replication and Failover
+Subtask 2.1: Test Data Replication
+Let's create test data and verify it replicates across all IdM servers.
+
+Connect to the primary IdM server:
+ssh root@idm-master
+kinit admin
+Create a test user:
+ipa user-add testuser1 \
+  --first=Test \
+  --last=User1 \
+  --email=testuser1@example.com \
+  --password
+Create a test group:
+ipa group-add testgroup1 --desc="Test Group 1"
+Add user to group:
+ipa group-add-member testgroup1 --users=testuser1
+Verify data on first replica:
+ssh root@idm-replica1
+kinit admin
+ipa user-show testuser1
+ipa group-show testgroup1
+Verify data on second replica:
+ssh root@idm-replica2
+kinit admin
+ipa user-show testuser1
+ipa group-show testgroup1
+Subtask 2.2: Test Bidirectional Replication
+Now let's test that changes made on replicas also propagate to other servers.
+
+Connect to first replica:
+ssh root@idm-replica1
+kinit admin
+Create a user from replica1:
+ipa user-add testuser2 \
+  --first=Test \
+  --last=User2 \
+  --email=testuser2@example.com \
+  --password
+Connect to second replica:
+ssh root@idm-replica2
+kinit admin
+Create a user from replica2:
+ipa user-add testuser3 \
+  --first=Test \
+  --last=User3 \
+  --email=testuser3@example.com \
+  --password
+Verify all users exist on master:
+ssh root@idm-master
+kinit admin
+ipa user-find --all
+Check replication status:
+ipa-replica-manage list-ruv
+Subtask 2.3: Test Failover Scenarios
+Let's simulate server failures and test how clients handle failover.
+
+Configure a test client:
+ssh root@client1
+Install IdM client:
+dnf install -y ipa-client
+Join client to IdM domain:
+ipa-client-install \
+  --domain=example.com \
+  --server=idm-master.example.com \
+  --server=idm-replica1.example.com \
+  --server=idm-replica2.example.com \
+  --unattended
+Test authentication before failover:
+kinit testuser1
+klist
+Simulate master server failure:
+ssh root@idm-master
+ipactl stop
+Test authentication during failover:
+ssh root@client1
+kinit testuser2
+klist
+Verify client can still access IdM services:
+ipa user-show testuser1
+Restart master server:
+ssh root@idm-master
+ipactl start
+Subtask 2.4: Monitor Replication Performance
+Let's check replication performance and identify any potential issues.
+
+Check replication lag:
+ssh root@idm-master
+kinit admin
+ipa-replica-manage list-ruv
+Monitor LDAP replication:
+ldapsearch -x -D "cn=Directory Manager" -W \
+  -b "cn=replica,cn=dc\=example\,dc\=com,cn=mapping tree,cn=config" \
+  -s sub "(objectclass=*)"
+Check replication status on all servers:
+for server in idm-master idm-replica1 idm-replica2; do
+  echo "=== $server ==="
+  ssh root@$server "ipa-replica-manage list"
+done
+Task 3: Troubleshoot Replication Issues Using ipa-replica-manage
+Subtask 3.1: Identify Common Replication Problems
+Let's learn how to identify and diagnose common replication issues.
+
+Check for broken replication agreements:
+ssh root@idm-master
+kinit admin
+ipa-replica-manage list --verbose
+Check replication status:
+ipa-replica-manage list-ruv
+Examine replication conflicts:
+ldapsearch -x -D "cn=Directory Manager" -W \
+  -b "dc=example,dc=com" \
+  "(nsds5ReplConflict=*)"
+Check server connectivity:
+ipa-replica-conncheck --master idm-replica1.example.com
+ipa-replica-conncheck --master idm-replica2.example.com
+Subtask 3.2: Simulate and Fix Replication Issues
+Let's create some replication issues and learn how to resolve them.
+
+Create a replication conflict scenario:
+# On master
+ssh root@idm-master
+kinit admin
+ipa user-add conflictuser --first=Conflict --last=Master --password
+
+# Simultaneously on replica1 (simulate network partition)
+ssh root@idm-replica1
+iptables -A INPUT -s 192.168.1.10 -j DROP
+ipa user-add conflictuser --first=Conflict --last=Replica --password
+Restore connectivity:
+ssh root@idm-replica1
+iptables -D INPUT -s 192.168.1.10 -j DROP
+Check for conflicts:
+ldapsearch -x -D "cn=Directory Manager" -W \
+  -b "dc=example,dc=com" \
+  "(nsds5ReplConflict=*)"
+Resolve conflicts manually:
+# Identify the conflict entry
+ldapsearch -x -D "cn=Directory Manager" -W \
+  -b "uid=conflictuser,cn=users,cn=accounts,dc=example,dc=com" \
+  "(objectclass=*)"
+
+# Delete the conflict entry
+ldapdelete -x -D "cn=Directory Manager" -W \
+  "uid=conflictuser + nsuniqueid=...,cn=users,cn=accounts,dc=example,dc=com"
+Subtask 3.3: Reinitialize Broken Replicas
+Sometimes replicas become severely out of sync and need to be reinitialized.
+
+Check replication status:
+ssh root@idm-master
+ipa-replica-manage list --verbose
+Force reinitialize a replica:
+ipa-replica-manage re-initialize --from idm-master.example.com idm-replica1.example.com
+Monitor reinitialize progress:
+tail -f /var/log/dirsrv/slapd-EXAMPLE-COM/access
+Verify reinitialize completion:
+ipa-replica-manage list-ruv
+Subtask 3.4: Remove and Re-add Problematic Replicas
+In extreme cases, you may need to completely remove and re-add a replica.
+
+Remove a replica from topology:
+ssh root@idm-master
+kinit admin
+ipa server-del idm-replica2.example.com --force
+Clean up the removed server:
+ssh root@idm-replica2
+ipa-server-install --uninstall
+Re-add the replica:
+# Prepare new replica file
+ssh root@idm-master
+ipa-replica-prepare idm-replica2.example.com --ip-address=192.168.1.12
+
+# Copy and install
+scp /var/lib/ipa/replica-info-idm-replica2.example.com.gpg root@idm-replica2:/tmp/
+ssh root@idm-replica2
+ipa-replica-install /tmp/replica-info-idm-replica2.example.com.gpg \
+  --setup-dns \
+  --forwarder=8.8.8.8
+Subtask 3.5: Advanced Troubleshooting Techniques
+Let's explore advanced troubleshooting methods for complex replication issues.
+
+Enable detailed replication logging:
+ssh root@idm-master
+ldapmodify -x -D "cn=Directory Manager" -W << EOF
+dn: cn=config
+changetype: modify
+replace: nsslapd-errorlog-level
+nsslapd-errorlog-level: 8192
+EOF
+Monitor replication in real-time:
+tail -f /var/log/dirsrv/slapd-EXAMPLE-COM/errors | grep -i repl
+Check replication agreement details:
+ldapsearch -x -D "cn=Directory Manager" -W \
+  -b "cn=config" \
+  "(objectclass=nsds5replicationagreement)"
+Manually trigger replication:
+ldapmodify -x -D "cn=Directory Manager" -W << EOF
+dn: cn=meTo_idm-replica1.example.com,cn=replica,cn=dc\=example\,dc\=com,cn=mapping tree,cn=config
+changetype: modify
+replace: nsds5BeginReplicaRefresh
+nsds5BeginReplicaRefresh: start
+EOF
+Reset replication logging:
+ldapmodify -x -D "cn=Directory Manager" -W << EOF
+dn: cn=config
+changetype: modify
+replace: nsslapd-errorlog-level
+nsslapd-errorlog-level: 266354688
+EOF
+Verification and Testing
+Final Verification Steps
+Verify all replicas are healthy:
+for server in idm-master idm-replica1 idm-replica2; do
+  echo "=== Checking $server ==="
+  ssh root@$server "ipactl status"
+  ssh root@$server "ipa-replica-manage list"
+done
+Test complete replication cycle:
+# Create test data on each server
+ssh root@idm-master
+kinit admin
+ipa user-add finaltest1 --first=Final --last=Test1 --password
+
+ssh root@idm-replica1
+kinit admin
+ipa user-add finaltest2 --first=Final --last=Test2 --password
+
+ssh root@idm-replica2
+kinit admin
+ipa user-add finaltest3 --first=Final --last=Test3 --password
+
+# Verify all users exist on all servers
+for server in idm-master idm-replica1 idm-replica2; do
+  echo "=== Users on $server ==="
+  ssh root@$server "kinit admin && ipa user-find finaltest"
+done
+Performance and health check:
+ssh root@idm-master
+kinit admin
+ipa topologysegment-find domain
+ipa topologysegment-find ca
+ipa-replica-manage list-ruv
+Troubleshooting Tips
+Common Issues and Solutions
+Issue: Replication agreements not working
+
+Solution: Check network connectivity, firewall rules, and DNS resolution
+Command: ipa-replica-conncheck --master <server>
+Issue: Time synchronization problems
+
+Solution: Ensure all servers have synchronized time using NTP/chrony
+Command: chrony sources -v
+Issue: Certificate issues
+
+Solution: Verify CA certificates and renew if necessary
+Command: ipa-cacert-manage list
+Issue: High replication lag
+
+Solution: Check server resources, network bandwidth, and LDAP performance
+Command: ipa-replica-manage list --verbose
+Issue: Split-brain scenarios
+
+Solution: Identify the authoritative server and reinitialize others
+Command: ipa-replica-manage re-initialize
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Configured multiple IdM replicas to provide high availability and redundancy for your identity management infrastructure
+Tested replication functionality by creating users and groups and verifying they replicate across all servers
+Simulated failover scenarios to ensure clients can continue authenticating even when the primary server is unavailable
+Learned troubleshooting techniques using ipa-replica-manage to identify and resolve replication issues
+Implemented best practices for monitoring and maintaining IdM replication topology
+Why This Matters: IdM server replication is crucial for enterprise environments because it:
+
+Provides high availability ensuring users can always authenticate
+Distributes load across multiple servers improving performance
+Offers disaster recovery capabilities protecting against server failures
+Enables geographic distribution of identity services
+Maintains data consistency across the entire infrastructure
+The skills you've developed in this lab are essential for maintaining robust, scalable identity management systems in production environments. Understanding replication topology, troubleshooting techniques, and failover procedures will help you ensure your organization's identity infrastructure remains reliable and performant.
+
+Next Steps: Consider exploring advanced topics such as:
+
+Cross-forest trusts with Active Directory
+IdM integration with external authentication systems
+Advanced monitoring and alerting for replication health
+Automated backup and recovery procedures for IdM infrastructure
