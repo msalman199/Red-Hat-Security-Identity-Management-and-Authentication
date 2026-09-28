@@ -1,0 +1,460 @@
+Lab 10: Implementing Access Control in IdM
+Objectives
+By the end of this lab, you will be able to:
+
+Configure Host-Based Access Control (HBAC) rules in Red Hat Identity Management (IdM)
+Create and manage access control policies based on user attributes and group membership
+Apply granular access restrictions to control which users can access specific hosts and services
+Test and validate access control policies using different user accounts
+Troubleshoot common access control issues in IdM environments
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with user and group management concepts
+Knowledge of SSH and remote login procedures
+Understanding of Red Hat Identity Management fundamentals
+Completed previous IdM labs or equivalent experience
+Required Knowledge Areas
+Linux user authentication mechanisms
+Basic networking concepts (IP addresses, hostnames)
+Command line text editors (vi/vim or nano)
+Understanding of security policies and access control principles
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure complex networking.
+
+Your lab environment includes:
+
+IdM Server: Pre-installed FreeIPA server with administrative access
+Client Machines: Multiple RHEL-based clients enrolled in the IdM domain
+Test Users: Pre-created user accounts for testing access controls
+Network Configuration: Fully configured DNS and network services
+Task 1: Understanding and Configuring HBAC Rules
+Subtask 1.1: Explore Current HBAC Configuration
+First, let's examine the existing HBAC (Host-Based Access Control) rules in your IdM environment.
+
+Connect to the IdM server using the provided credentials:
+# SSH to the IdM server
+ssh admin@idm-server.example.com
+Authenticate with Kerberos:
+# Obtain Kerberos ticket
+kinit admin
+# Enter the admin password when prompted
+List existing HBAC rules:
+# View all current HBAC rules
+ipa hbacrule-find
+
+# Get detailed information about the default rule
+ipa hbacrule-show allow_all
+Examine HBAC rule components:
+# List available users for HBAC rules
+ipa user-find --all
+
+# List available groups
+ipa group-find --all
+
+# List enrolled hosts
+ipa host-find --all
+
+# List available services
+ipa hbacsvc-find
+Subtask 1.2: Create Custom HBAC Rules
+Now we'll create specific access control rules to restrict access based on user groups.
+
+Disable the default allow_all rule (this allows everyone access to everything):
+# Disable the permissive default rule
+ipa hbacrule-disable allow_all
+
+# Verify the rule is disabled
+ipa hbacrule-show allow_all
+Create a rule for administrators:
+# Create HBAC rule for admin access
+ipa hbacrule-add admin_access \
+  --desc="Allow administrators full access to all systems"
+
+# Add the admins group to the rule
+ipa hbacrule-add-user admin_access --groups=admins
+
+# Allow access to all hosts
+ipa hbacrule-add-host admin_access --hosts=idm-server.example.com
+ipa hbacrule-add-host admin_access --hosts=client1.example.com
+ipa hbacrule-add-host admin_access --hosts=client2.example.com
+
+# Allow all services
+ipa hbacrule-add-service admin_access --hbacsvcs=sshd
+ipa hbacrule-add-service admin_access --hbacsvcs=login
+ipa hbacrule-add-service admin_access --hbacsvcs=su
+ipa hbacrule-add-service admin_access --hbacsvcs=sudo
+Create a rule for regular users:
+# Create HBAC rule for regular user access
+ipa hbacrule-add user_workstation_access \
+  --desc="Allow regular users access to workstation services only"
+
+# Add the users group to the rule
+ipa hbacrule-add-user user_workstation_access --groups=users
+
+# Allow access to client machines only (not the server)
+ipa hbacrule-add-host user_workstation_access --hosts=client1.example.com
+ipa hbacrule-add-host user_workstation_access --hosts=client2.example.com
+
+# Allow only SSH and login services
+ipa hbacrule-add-service user_workstation_access --hbacsvcs=sshd
+ipa hbacrule-add-service user_workstation_access --hbacsvcs=login
+Create a rule for developers:
+# Create HBAC rule for developer access
+ipa hbacrule-add developer_access \
+  --desc="Allow developers access to development systems with sudo"
+
+# Add the developers group to the rule
+ipa hbacrule-add-user developer_access --groups=developers
+
+# Allow access to specific development hosts
+ipa hbacrule-add-host developer_access --hosts=client1.example.com
+
+# Allow SSH, login, and sudo services
+ipa hbacrule-add-service developer_access --hbacsvcs=sshd
+ipa hbacrule-add-service developer_access --hbacsvcs=login
+ipa hbacrule-add-service developer_access --hbacsvcs=sudo
+Subtask 1.3: Verify HBAC Rule Configuration
+Display all HBAC rules:
+# List all HBAC rules with their status
+ipa hbacrule-find --all
+
+# Show detailed configuration of each rule
+ipa hbacrule-show admin_access --all
+ipa hbacrule-show user_workstation_access --all
+ipa hbacrule-show developer_access --all
+Test HBAC rule syntax:
+# Test if a specific user can access a host/service combination
+ipa hbactest --user=testuser1 --host=client1.example.com --service=sshd
+ipa hbactest --user=admin --host=idm-server.example.com --service=sshd
+ipa hbactest --user=developer1 --host=client2.example.com --service=sudo
+Task 2: Applying Group-Based Access Policies
+Subtask 2.1: Create Test Users and Groups
+Create user groups if they don't already exist:
+# Create developers group
+ipa group-add developers --desc="Development team members"
+
+# Create users group (may already exist)
+ipa group-add users --desc="Regular system users" || echo "Group already exists"
+
+# Verify admins group exists
+ipa group-show admins
+Create test users:
+# Create test users for different groups
+ipa user-add testuser1 \
+  --first=Test --last=User1 \
+  --password
+
+# Create developer user
+ipa user-add developer1 \
+  --first=Developer --last=One \
+  --password
+
+# Create admin user
+ipa user-add testadmin \
+  --first=Test --last=Admin \
+  --password
+Add users to appropriate groups:
+# Add testuser1 to users group
+ipa group-add-member users --users=testuser1
+
+# Add developer1 to developers group
+ipa group-add-member developers --users=developer1
+
+# Add testadmin to admins group
+ipa group-add-member admins --users=testadmin
+
+# Verify group memberships
+ipa user-show testuser1 --all
+ipa user-show developer1 --all
+ipa user-show testadmin --all
+Subtask 2.2: Configure Advanced Access Policies
+Create time-based access restrictions:
+# Create a rule for business hours access
+ipa hbacrule-add business_hours_access \
+  --desc="Allow access only during business hours"
+
+# Add users group
+ipa hbacrule-add-user business_hours_access --groups=users
+
+# Add hosts
+ipa hbacrule-add-host business_hours_access --hosts=client1.example.com
+
+# Add services
+ipa hbacrule-add-service business_hours_access --hbacsvcs=sshd
+Create service-specific restrictions:
+# Create a rule that denies sudo access to regular users
+ipa hbacrule-add no_sudo_users \
+  --desc="Explicitly deny sudo access to regular users"
+
+# This rule will be used to demonstrate explicit denial
+# Note: In FreeIPA, denial is typically handled by not including 
+# the service in allowed rules rather than explicit denial rules
+Configure host-specific policies:
+# Create a rule for server access (admins only)
+ipa hbacrule-add server_access_only \
+  --desc="Only administrators can access the IdM server"
+
+# Add only admins group
+ipa hbacrule-add-user server_access_only --groups=admins
+
+# Add only the IdM server
+ipa hbacrule-add-host server_access_only --hosts=idm-server.example.com
+
+# Add all services for admins on the server
+ipa hbacrule-add-service server_access_only --hbacsvcs=sshd
+ipa hbacrule-add-service server_access_only --hbacsvcs=login
+ipa hbacrule-add-service server_access_only --hbacsvcs=su
+ipa hbacrule-add-service server_access_only --hbacsvcs=sudo
+Subtask 2.3: Implement Conditional Access Policies
+Create external group mappings (if using external authentication):
+# Example of creating external group mapping
+# This would be used if integrating with Active Directory or LDAP
+
+# Create external group
+ipa group-add external_contractors \
+  --desc="External contractors with limited access" \
+  --external
+
+# Create corresponding HBAC rule
+ipa hbacrule-add contractor_access \
+  --desc="Limited access for external contractors"
+
+ipa hbacrule-add-user contractor_access --groups=external_contractors
+ipa hbacrule-add-host contractor_access --hosts=client2.example.com
+ipa hbacrule-add-service contractor_access --hbacsvcs=sshd
+Configure sudo rules integration:
+# Create sudo rule that works with HBAC
+ipa sudorule-add developer_sudo \
+  --desc="Allow developers sudo access on development systems"
+
+# Add developers group to sudo rule
+ipa sudorule-add-user developer_sudo --groups=developers
+
+# Add development hosts
+ipa sudorule-add-host developer_sudo --hosts=client1.example.com
+
+# Allow specific commands or ALL
+ipa sudorule-add-allow-command developer_sudo --sudocmds=ALL
+Task 3: Testing Access Controls with Different Users
+Subtask 3.1: Test Administrative Access
+Test admin user access:
+# Test HBAC rules for admin user
+ipa hbactest --user=testadmin --host=idm-server.example.com --service=sshd
+ipa hbactest --user=testadmin --host=client1.example.com --service=sudo
+
+# Expected result: Access should be allowed for both tests
+Verify admin can access all systems:
+# From a separate terminal, test actual SSH access
+# Open new terminal and try to SSH as testadmin
+ssh testadmin@idm-server.example.com
+# Enter password when prompted
+
+# Test sudo access
+sudo whoami
+# Should return 'root'
+
+# Exit and test client access
+exit
+ssh testadmin@client1.example.com
+sudo whoami
+exit
+Subtask 3.2: Test Regular User Access
+Test regular user restrictions:
+# Test HBAC rules for regular user
+ipa hbactest --user=testuser1 --host=idm-server.example.com --service=sshd
+# Expected result: Access DENIED
+
+ipa hbactest --user=testuser1 --host=client1.example.com --service=sshd
+# Expected result: Access ALLOWED
+
+ipa hbactest --user=testuser1 --host=client1.example.com --service=sudo
+# Expected result: Access DENIED
+Verify actual access behavior:
+# Test actual SSH access for regular user
+# From separate terminal:
+ssh testuser1@idm-server.example.com
+# Should be denied or fail
+
+ssh testuser1@client1.example.com
+# Should succeed
+
+# Once logged in as testuser1:
+sudo whoami
+# Should fail with permission denied
+exit
+Subtask 3.3: Test Developer Access
+Test developer-specific rules:
+# Test HBAC rules for developer
+ipa hbactest --user=developer1 --host=client1.example.com --service=sshd
+# Expected result: Access ALLOWED
+
+ipa hbactest --user=developer1 --host=client1.example.com --service=sudo
+# Expected result: Access ALLOWED
+
+ipa hbactest --user=developer1 --host=client2.example.com --service=sshd
+# Expected result: Access DENIED (not in developer_access rule)
+Verify developer sudo access:
+# Test actual access
+ssh developer1@client1.example.com
+# Should succeed
+
+# Test sudo access
+sudo whoami
+# Should return 'root'
+
+# Test access to restricted host
+exit
+ssh developer1@client2.example.com
+# Should be denied
+Subtask 3.4: Comprehensive Access Testing
+Create a test matrix:
+# Create a script to test multiple scenarios
+cat > /tmp/test_access.sh << 'EOF'
+#!/bin/bash
+
+echo "=== HBAC Access Test Matrix ==="
+echo
+
+# Test scenarios
+scenarios=(
+    "testadmin idm-server.example.com sshd"
+    "testadmin client1.example.com sudo"
+    "testuser1 idm-server.example.com sshd"
+    "testuser1 client1.example.com sshd"
+    "testuser1 client1.example.com sudo"
+    "developer1 client1.example.com sshd"
+    "developer1 client1.example.com sudo"
+    "developer1 client2.example.com sshd"
+)
+
+for scenario in "${scenarios[@]}"; do
+    read -r user host service <<< "$scenario"
+    echo -n "Testing $user -> $host ($service): "
+    result=$(ipa hbactest --user="$user" --host="$host" --service="$service" 2>/dev/null | grep -o "Access.*")
+    echo "$result"
+done
+EOF
+
+chmod +x /tmp/test_access.sh
+/tmp/test_access.sh
+Document test results:
+# Create a comprehensive test report
+cat > /tmp/access_test_report.txt << 'EOF'
+HBAC Access Control Test Report
+===============================
+
+Test Date: $(date)
+
+Rule Configurations:
+- admin_access: Admins group -> All hosts, all services
+- user_workstation_access: Users group -> Client hosts, SSH/login only
+- developer_access: Developers group -> Client1, SSH/login/sudo
+- server_access_only: Admins group -> IdM server only
+
+Expected Results:
+- testadmin: Full access to all systems
+- testuser1: Access to clients for SSH/login only
+- developer1: Access to client1 with sudo, no access to client2
+- All users: No access to IdM server except admins
+
+Actual Test Results:
+[Results from test matrix above]
+EOF
+
+echo "Test report created at /tmp/access_test_report.txt"
+Troubleshooting Common Issues
+Issue 1: Access Denied Despite Correct Rules
+Problem: User cannot access system even though HBAC test shows access should be allowed.
+
+Solution:
+
+# Check SSSD cache and refresh
+systemctl restart sssd
+
+# Clear SSSD cache
+sss_cache -E
+
+# Verify client is properly enrolled
+ipa-client-install --unattended --force-join
+
+# Check SSSD logs
+tail -f /var/log/sssd/sssd_domain.log
+Issue 2: HBAC Test Shows Different Results Than Expected
+Problem: ipa hbactest results don't match the configured rules.
+
+Solution:
+
+# Verify rule is enabled
+ipa hbacrule-show rulename --all
+
+# Check for conflicting rules
+ipa hbacrule-find --enabled=true
+
+# Verify user group membership
+ipa user-show username --all
+
+# Check host enrollment
+ipa host-show hostname.domain.com
+Issue 3: Sudo Access Not Working Despite HBAC Rules
+Problem: User can SSH but sudo doesn't work even with proper HBAC rules.
+
+Solution:
+
+# Check sudo rules separately
+ipa sudorule-find --users=username
+
+# Verify sudo service in HBAC rule
+ipa hbacrule-show rulename --all
+
+# Check sudoers configuration on client
+sudo visudo -c
+
+# Restart SSSD on client
+systemctl restart sssd
+Advanced Configuration Tips
+Monitoring and Logging
+Enable detailed HBAC logging:
+# On IdM server, increase log level
+ipa config-mod --user-search-fields=uid,givenname,sn,telephonenumber,ou,title --group-search-fields=cn,description
+
+# On clients, enable debug logging
+echo "debug_level = 9" >> /etc/sssd/sssd.conf
+systemctl restart sssd
+Monitor access attempts:
+# Watch authentication logs
+tail -f /var/log/secure
+
+# Monitor SSSD logs
+tail -f /var/log/sssd/sssd_domain.log
+Performance Optimization
+Optimize HBAC rule evaluation:
+# Use specific hosts instead of host groups when possible
+# Minimize the number of rules
+# Order rules by frequency of use
+
+# Check rule evaluation performance
+time ipa hbactest --user=testuser --host=hostname --service=sshd
+Conclusion
+In this lab, you have successfully:
+
+Configured comprehensive HBAC rules in Red Hat Identity Management to control user access based on group membership, host location, and service requirements
+Implemented granular access policies that restrict regular users to workstation access while allowing administrators full system access and developers elevated privileges on specific systems
+Tested and validated access controls using multiple user accounts to ensure policies work as intended and provide appropriate security boundaries
+Learned troubleshooting techniques for common HBAC issues and how to monitor access control effectiveness
+Key Takeaways
+Security Best Practices: You've implemented the principle of least privilege by giving users only the minimum access necessary for their roles. This approach significantly reduces security risks in enterprise environments.
+
+Scalable Access Management: The group-based approach you've configured allows for easy management of access rights as organizations grow. Adding new users to appropriate groups automatically grants them the correct access levels.
+
+Compliance and Auditing: The HBAC rules you've created provide clear audit trails and help organizations meet compliance requirements by demonstrating controlled access to sensitive systems.
+
+Real-World Applications
+These access control skills are essential for:
+
+Enterprise Security: Protecting critical infrastructure and sensitive data
+Compliance Requirements: Meeting regulatory standards like SOX, HIPAA, or PCI-DSS
+Operational Efficiency: Reducing administrative overhead while maintaining security
+Risk Management: Minimizing the impact of compromised accounts through limited access
+The access control framework you've implemented serves as a foundation for more advanced security policies and can be extended to integrate with other security tools and monitoring systems in production environments.
