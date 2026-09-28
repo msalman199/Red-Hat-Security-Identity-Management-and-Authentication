@@ -1,0 +1,319 @@
+Lab 13: Configuring Cross-Forest Trust with Active Directory
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the concept of cross-forest trust between Identity Management (IdM) and Active Directory
+Configure a cross-forest trust using the ipa trust-add command
+Map POSIX attributes to Active Directory users for seamless integration
+Verify and test access to Active Directory resources from IdM-managed systems
+Troubleshoot common trust relationship issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux system administration
+Familiarity with Active Directory concepts and terminology
+Knowledge of DNS configuration and name resolution
+Understanding of Kerberos authentication principles
+Experience with command-line interface operations
+Completed previous IdM labs or equivalent knowledge
+Required Knowledge Areas
+Active Directory Domain Services: Understanding of AD domains, forests, and trust relationships
+Identity Management (IdM): Basic IdM server configuration and management
+DNS Configuration: Forward and reverse DNS zone management
+Kerberos: Authentication protocols and ticket-granting concepts
+LDAP: Directory service protocols and attribute mapping
+Lab Environment Setup
+Ready-to-Use Cloud Machines
+Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment. No need to build your own virtual machines or configure base systems.
+
+Lab Infrastructure
+Your lab environment includes:
+
+IdM Server (idm.example.com): Red Hat Identity Management server
+AD Server (ad.contoso.com): Windows Active Directory Domain Controller
+Client Machine (client.example.com): Linux client for testing access
+DNS Servers: Pre-configured for both domains
+Task 1: Configure Cross-Forest Trust Using ipa trust-add
+Subtask 1.1: Verify Prerequisites and Environment
+First, let's verify that our environment is properly configured and all services are running.
+
+Step 1: Check IdM Server Status
+# Connect to the IdM server
+ssh root@idm.example.com
+
+# Verify IdM services are running
+ipactl status
+
+# Check IdM server configuration
+ipa config-show
+Step 2: Verify DNS Configuration
+# Test forward DNS resolution for AD domain
+nslookup ad.contoso.com
+
+# Test reverse DNS resolution
+nslookup 192.168.1.100
+
+# Verify SRV records for AD domain
+dig _ldap._tcp.contoso.com SRV
+dig _kerberos._tcp.contoso.com SRV
+Step 3: Check Network Connectivity
+# Test connectivity to AD server
+ping ad.contoso.com
+
+# Test LDAP connectivity
+telnet ad.contoso.com 389
+
+# Test Kerberos connectivity
+telnet ad.contoso.com 88
+Subtask 1.2: Prepare Active Directory for Trust
+Step 4: Configure AD DNS Forwarders
+# On the AD server, configure DNS forwarders to IdM domain
+# This step is typically done through Windows DNS Manager GUI
+# or PowerShell commands on the AD server
+
+# Verify AD can resolve IdM domain
+nslookup idm.example.com
+Step 5: Create AD Service Account for Trust
+# Create a dedicated service account in AD for the trust relationship
+# This is done on the AD server using PowerShell:
+
+# New-ADUser -Name "idm-trust" -UserPrincipalName "idm-trust@contoso.com" 
+# -AccountPassword (ConvertTo-SecureString "ComplexPassword123!" -AsPlainText -Force) 
+# -Enabled $true
+Subtask 1.3: Establish the Cross-Forest Trust
+Step 6: Install Required Packages
+# Ensure trust-related packages are installed
+dnf install -y ipa-server-trust-ad samba-client
+
+# Restart IdM services after package installation
+ipactl restart
+Step 7: Configure IdM for Trust Relationships
+# Enable trust support on IdM server
+ipa-adtrust-install --netbios-name=EXAMPLE --rid-base=1000000 --secondary-rid-base=2000000
+
+# This command will:
+# - Configure Samba for AD integration
+# - Set up NetBIOS name resolution
+# - Configure RID ranges for user/group mapping
+Step 8: Create the Cross-Forest Trust
+# Add the trust relationship to Active Directory
+ipa trust-add --type=ad contoso.com --admin Administrator --password
+
+# When prompted, enter the AD Administrator password
+# The command will establish bidirectional trust by default
+Step 9: Verify Trust Creation
+# List all configured trusts
+ipa trust-show contoso.com
+
+# Check trust status
+ipa trustdomain-find contoso.com
+
+# Verify trust relationship details
+ipa trust-find
+Task 2: Map POSIX Attributes to Active Directory Users
+Subtask 2.1: Configure Attribute Mapping
+Step 10: Understand Default Attribute Mapping
+# View current ID range configuration
+ipa idrange-find
+
+# Check default attribute mapping
+ipa config-show | grep -i posix
+Step 11: Configure Custom Attribute Mapping
+# Create custom ID range for AD users if needed
+ipa idrange-add --base-id=2000000 --range-size=200000 --rid-base=1000 --secondary-rid-base=1000000 contoso.com_id_range --type=ipa-ad-trust
+
+# Configure POSIX attribute mapping for specific AD attributes
+ipa config-mod --user-search-fields=uid,givenname,sn,telephonenumber,ou,title
+Step 12: Set Up Automatic UID/GID Assignment
+# Configure automatic ID assignment for AD users
+ipa config-mod --enable-sid --auto-private-groups=true
+
+# Set default shell for AD users
+ipa config-mod --defaultshell=/bin/bash
+
+# Configure home directory template
+ipa config-mod --homedirectory=/home/%u
+Subtask 2.2: Test User Attribute Resolution
+Step 13: Query AD Users Through IdM
+# Search for AD users through IdM
+ipa user-find --all --raw | grep contoso
+
+# Get detailed information about a specific AD user
+ipa user-show administrator@contoso.com --all
+
+# Test ID resolution for AD users
+id administrator@contoso.com
+Step 14: Verify Group Membership Resolution
+# List AD groups visible through IdM
+ipa group-find --all | grep contoso
+
+# Check group membership for AD users
+ipa group-show "domain users@contoso.com" --all
+
+# Verify nested group resolution
+getent group "domain admins@contoso.com"
+Task 3: Verify Access to AD Resources from IdM-Managed Systems
+Subtask 3.1: Configure Client for Cross-Forest Authentication
+Step 15: Prepare IdM Client Machine
+# Connect to the client machine
+ssh root@client.example.com
+
+# Ensure client is properly enrolled in IdM
+ipa-client-install --domain=example.com --server=idm.example.com --realm=EXAMPLE.COM
+
+# Verify client enrollment
+ipa env
+Step 16: Configure SSSD for AD Trust
+# Edit SSSD configuration to enable AD trust
+vi /etc/sssd/sssd.conf
+
+# Add or modify the following sections:
+[domain/example.com]
+subdomain_inherit = parent_domain
+subdomain_homedir = /home/%d/%u
+subdomain_enumerate = false
+
+[sssd]
+domains = example.com
+services = nss, pam, ssh, sudo
+# Restart SSSD service
+systemctl restart sssd
+
+# Clear SSSD cache
+sss_cache -E
+Subtask 3.2: Test Authentication and Access
+Step 17: Test AD User Authentication
+# Test SSH access with AD credentials
+ssh administrator@contoso.com@client.example.com
+
+# Test local authentication
+su - administrator@contoso.com
+
+# Verify user information resolution
+getent passwd administrator@contoso.com
+getent group "domain users@contoso.com"
+Step 18: Test File System Access
+# Create a test directory with specific permissions
+mkdir /shared/ad-test
+chown administrator@contoso.com:domain\ users@contoso.com /shared/ad-test
+chmod 755 /shared/ad-test
+
+# Test file creation as AD user
+sudo -u administrator@contoso.com touch /shared/ad-test/testfile.txt
+
+# Verify ownership and permissions
+ls -la /shared/ad-test/
+Step 19: Test Sudo Access Configuration
+# Configure sudo access for AD users
+visudo
+
+# Add the following line to grant sudo access to AD domain admins:
+# %domain\ admins@contoso.com ALL=(ALL) ALL
+
+# Test sudo access
+sudo -u administrator@contoso.com sudo whoami
+Subtask 3.3: Verify Cross-Domain Resource Access
+Step 20: Test Kerberos Ticket Acquisition
+# Obtain Kerberos ticket for AD user
+kinit administrator@CONTOSO.COM
+
+# List current tickets
+klist
+
+# Test cross-realm ticket acquisition
+kvno host/ad.contoso.com@CONTOSO.COM
+Step 21: Test LDAP Queries Across Domains
+# Query AD LDAP through IdM
+ldapsearch -H ldap://idm.example.com -D "uid=admin,cn=users,cn=accounts,dc=example,dc=com" -W -b "cn=users,cn=accounts,dc=example,dc=com" "(memberof=*contoso*)"
+
+# Test direct AD LDAP access
+ldapsearch -H ldap://ad.contoso.com -D "administrator@contoso.com" -W -b "dc=contoso,dc=com" "(objectclass=user)"
+Step 22: Verify Service Access
+# Test access to IdM-managed services with AD credentials
+curl -u administrator@contoso.com:password https://idm.example.com/ipa/ui/
+
+# Test SSH key-based authentication setup
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/ad_user_key
+ipa user-mod administrator@contoso.com --sshpubkey="$(cat ~/.ssh/ad_user_key.pub)"
+Troubleshooting Common Issues
+DNS Resolution Problems
+# Check DNS configuration
+cat /etc/resolv.conf
+
+# Test DNS resolution manually
+dig example.com
+dig contoso.com
+
+# Verify SRV records
+dig _kerberos._tcp.example.com SRV
+dig _ldap._tcp.contoso.com SRV
+Trust Relationship Issues
+# Check trust status
+ipa trust-show contoso.com
+
+# Verify Kerberos configuration
+cat /etc/krb5.conf
+
+# Test cross-realm authentication
+kinit -k host/idm.example.com
+kvno krbtgt/CONTOSO.COM@EXAMPLE.COM
+User Resolution Problems
+# Clear SSSD cache
+sss_cache -E
+
+# Check SSSD logs
+tail -f /var/log/sssd/sssd_example.com.log
+
+# Test user lookup manually
+getent passwd administrator@contoso.com
+id administrator@contoso.com
+Performance Optimization
+# Configure SSSD caching
+vi /etc/sssd/sssd.conf
+
+# Add caching parameters:
+# cache_credentials = true
+# account_cache_expiration = 1
+# entry_cache_timeout = 600
+Verification and Testing Checklist
+Trust Configuration Verification
+ Trust relationship established successfully
+ DNS resolution working bidirectionally
+ Kerberos cross-realm authentication functional
+ LDAP queries returning AD user information
+User Access Verification
+ AD users can authenticate to IdM-managed systems
+ POSIX attributes correctly mapped and resolved
+ Group memberships properly inherited
+ Home directories created automatically
+Service Integration Verification
+ SSH access working with AD credentials
+ Sudo access configured and functional
+ File system permissions working correctly
+ Web services accessible with AD authentication
+Conclusion
+In this lab, you have successfully configured a cross-forest trust between Red Hat Identity Management and Microsoft Active Directory. This integration enables seamless authentication and authorization across both directory services, providing users with single sign-on capabilities and administrators with centralized identity management.
+
+Key Accomplishments
+You have learned to:
+
+Establish Trust Relationships: Successfully configured bidirectional trust between IdM and Active Directory using the ipa trust-add command
+Attribute Mapping: Implemented POSIX attribute mapping to ensure AD users have proper Unix/Linux attributes for system access
+Cross-Domain Authentication: Verified that AD users can authenticate and access resources on IdM-managed Linux systems
+Service Integration: Tested various services including SSH, sudo, and file system access with cross-domain credentials
+Real-World Applications
+This configuration is essential in enterprise environments where organizations need to:
+
+Unify Identity Management: Integrate existing Windows Active Directory infrastructure with Linux/Unix systems
+Enable Single Sign-On: Allow users to access both Windows and Linux resources with a single set of credentials
+Centralize Access Control: Manage permissions and policies across heterogeneous environments
+Reduce Administrative Overhead: Eliminate the need for separate user accounts on different systems
+Next Steps
+To further enhance your cross-forest trust implementation, consider:
+
+Implementing advanced group policy mappings
+Configuring certificate-based authentication
+Setting up automated user provisioning workflows
+Implementing audit logging and compliance monitoring
+Exploring federation with cloud identity providers
+This lab provides the foundation for enterprise-grade identity management solutions that bridge Windows and Linux environments, enabling organizations to leverage the best of both platforms while maintaining security and administrative efficiency.
