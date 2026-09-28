@@ -1,0 +1,436 @@
+Lab 6: Configuring IdM in a Geographically Distributed Topology
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the concepts and benefits of geographically distributed Identity Management (IdM) topologies
+Install and configure multiple IdM servers across different geographic locations
+Set up proper replication between IdM servers for data consistency
+Configure DNS services for distributed IdM environments
+Test high availability scenarios and failover mechanisms
+Validate the distributed topology for redundancy and fault tolerance
+Troubleshoot common issues in distributed IdM deployments
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Identity Management (IdM) concepts
+Knowledge of DNS fundamentals
+Experience with command-line interface operations
+Understanding of network connectivity and firewall concepts
+Completion of basic IdM installation and configuration labs
+Required Knowledge Areas
+Linux command-line operations
+Basic networking concepts (IP addressing, DNS, firewalls)
+Understanding of LDAP and Kerberos authentication
+Familiarity with systemd service management
+Lab Environment Setup
+Al Nafi Cloud Machines: This lab uses pre-configured Linux-based cloud machines provided by Al Nafi. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Lab Infrastructure
+Your lab environment includes:
+
+3 CentOS Stream 9 servers (representing different geographic locations)
+idm-primary.example.com (Primary IdM server - East Coast)
+idm-replica1.example.com (Replica server - West Coast)
+idm-replica2.example.com (Replica server - Central Region)
+Pre-configured network connectivity between all servers
+Proper hostname resolution and time synchronization
+Task 1: Install Additional IdM Servers in Geographically Separated Locations
+Subtask 1.1: Prepare the Environment
+First, let's verify our lab environment and prepare all servers for IdM installation.
+
+Step 1: Connect to Primary IdM Server
+# Connect to the primary server
+ssh root@idm-primary.example.com
+
+# Verify hostname and network configuration
+hostnamectl
+ip addr show
+Step 2: Update System Packages
+# Update all packages on the primary server
+dnf update -y
+
+# Install required packages
+dnf install -y ipa-server ipa-server-dns bind-dyndb-ldap
+Step 3: Configure Firewall Rules
+# Configure firewall for IdM services
+firewall-cmd --permanent --add-service=freeipa-ldap
+firewall-cmd --permanent --add-service=freeipa-ldaps
+firewall-cmd --permanent --add-service=kerberos
+firewall-cmd --permanent --add-service=kpasswd
+firewall-cmd --permanent --add-service=ntp
+firewall-cmd --permanent --add-service=dns
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+Subtask 1.2: Install Primary IdM Server
+Step 1: Install Primary IdM Server with Integrated DNS
+# Install the primary IdM server
+ipa-server-install \
+  --realm=EXAMPLE.COM \
+  --domain=example.com \
+  --ds-password=RedHat123! \
+  --admin-password=RedHat123! \
+  --hostname=idm-primary.example.com \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --reverse-zone=1.168.192.in-addr.arpa. \
+  --unattended
+Note: This installation process may take 10-15 minutes. The --unattended flag prevents interactive prompts.
+
+Step 2: Verify Primary Server Installation
+# Check IdM services status
+systemctl status ipa
+
+# Verify Kerberos authentication
+kinit admin
+klist
+
+# Test web interface accessibility
+curl -k https://idm-primary.example.com/ipa/ui/
+Subtask 1.3: Prepare Replica Servers
+Step 1: Connect to First Replica Server
+# Open a new terminal and connect to replica1
+ssh root@idm-replica1.example.com
+
+# Update packages
+dnf update -y
+
+# Install IdM client and replica packages
+dnf install -y ipa-client ipa-server ipa-server-dns
+Step 2: Configure Firewall on Replica1
+# Configure firewall rules (same as primary)
+firewall-cmd --permanent --add-service=freeipa-ldap
+firewall-cmd --permanent --add-service=freeipa-ldaps
+firewall-cmd --permanent --add-service=kerberos
+firewall-cmd --permanent --add-service=kpasswd
+firewall-cmd --permanent --add-service=ntp
+firewall-cmd --permanent --add-service=dns
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+Step 3: Prepare Second Replica Server
+# Open another terminal and connect to replica2
+ssh root@idm-replica2.example.com
+
+# Update packages
+dnf update -y
+
+# Install required packages
+dnf install -y ipa-client ipa-server ipa-server-dns
+
+# Configure firewall (same commands as above)
+firewall-cmd --permanent --add-service=freeipa-ldap
+firewall-cmd --permanent --add-service=freeipa-ldaps
+firewall-cmd --permanent --add-service=kerberos
+firewall-cmd --permanent --add-service=kpasswd
+firewall-cmd --permanent --add-service=ntp
+firewall-cmd --permanent --add-service=dns
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+Task 2: Configure Replication and DNS
+Subtask 2.1: Install First Replica Server
+Step 1: Join Replica1 as Client First
+# On idm-replica1.example.com
+# Configure DNS to point to primary server
+echo "nameserver 192.168.1.10" > /etc/resolv.conf
+
+# Join as IdM client
+ipa-client-install \
+  --server=idm-primary.example.com \
+  --domain=example.com \
+  --realm=EXAMPLE.COM \
+  --principal=admin \
+  --password=RedHat123! \
+  --unattended
+Step 2: Promote Client to Replica
+# Authenticate as admin
+kinit admin
+
+# Install replica with DNS
+ipa-replica-install \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --unattended
+Step 3: Verify Replica1 Installation
+# Check services status
+systemctl status ipa
+
+# Verify replication
+ipa-replica-manage list
+ipa-csreplica-manage list
+
+# Test authentication
+kinit admin
+ipa user-find admin
+Subtask 2.2: Install Second Replica Server
+Step 1: Join Replica2 as Client
+# On idm-replica2.example.com
+# Configure DNS
+echo "nameserver 192.168.1.10" > /etc/resolv.conf
+
+# Join as IdM client
+ipa-client-install \
+  --server=idm-primary.example.com \
+  --domain=example.com \
+  --realm=EXAMPLE.COM \
+  --principal=admin \
+  --password=RedHat123! \
+  --unattended
+Step 2: Promote to Replica
+# Authenticate
+kinit admin
+
+# Install replica with DNS
+ipa-replica-install \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --unattended
+Subtask 2.3: Configure DNS Topology
+Step 1: Verify DNS Configuration
+# On primary server, check DNS zones
+ipa dnszone-find
+
+# Verify DNS records for all servers
+dig idm-primary.example.com
+dig idm-replica1.example.com
+dig idm-replica2.example.com
+Step 2: Configure DNS Load Balancing
+# Add DNS records for load balancing
+ipa dnsrecord-add example.com ipa --a-rec=192.168.1.10
+ipa dnsrecord-add example.com ipa --a-rec=192.168.1.11
+ipa dnsrecord-add example.com ipa --a-rec=192.168.1.12
+
+# Verify the records
+ipa dnsrecord-show example.com ipa
+Subtask 2.4: Configure Replication Topology
+Step 1: Check Current Topology
+# On any IdM server, check replication topology
+ipa topologysegment-find domain
+
+# Check CA replication topology
+ipa topologysegment-find ca
+Step 2: Optimize Replication Topology
+# Create additional replication agreements for better redundancy
+ipa topologysegment-add domain replica1-to-replica2 \
+  --leftnode=idm-replica1.example.com \
+  --rightnode=idm-replica2.example.com
+
+# Verify the new topology
+ipa topologysegment-find domain
+Task 3: Test the Distributed Topology for High Availability
+Subtask 3.1: Create Test Data
+Step 1: Create Test Users and Groups
+# On primary server, create test data
+kinit admin
+
+# Create test users
+ipa user-add testuser1 --first=Test --last=User1 --password
+ipa user-add testuser2 --first=Test --last=User2 --password
+ipa user-add testuser3 --first=Test --last=User3 --password
+
+# Create test group
+ipa group-add testgroup --desc="Test Group for HA Testing"
+
+# Add users to group
+ipa group-add-member testgroup --users=testuser1,testuser2,testuser3
+Step 2: Verify Data Replication
+# Check data on replica1
+ssh root@idm-replica1.example.com
+kinit admin
+ipa user-find testuser1
+ipa group-show testgroup
+
+# Check data on replica2
+ssh root@idm-replica2.example.com
+kinit admin
+ipa user-find testuser2
+ipa group-show testgroup
+Subtask 3.2: Test High Availability Scenarios
+Step 1: Test Primary Server Failure
+# Simulate primary server failure
+ssh root@idm-primary.example.com
+systemctl stop ipa
+
+# Test operations from replica1
+ssh root@idm-replica1.example.com
+kinit admin
+
+# Try to create a new user
+ipa user-add hatest1 --first=HA --last=Test1 --password
+
+# Verify the user was created
+ipa user-show hatest1
+Step 2: Test DNS Failover
+# From a client machine or replica, test DNS resolution
+nslookup idm-primary.example.com
+nslookup idm-replica1.example.com
+
+# Test service discovery
+dig _ldap._tcp.example.com SRV
+dig _kerberos._tcp.example.com SRV
+Step 3: Test Authentication Failover
+# Configure a test client to use multiple servers
+echo "192.168.1.11 idm-replica1.example.com" >> /etc/hosts
+echo "192.168.1.12 idm-replica2.example.com" >> /etc/hosts
+
+# Test authentication against different servers
+kinit -S host/idm-replica1.example.com testuser1
+kinit -S host/idm-replica2.example.com testuser2
+Subtask 3.3: Test Data Consistency
+Step 1: Create Data on Different Replicas
+# Create user on replica1
+ssh root@idm-replica1.example.com
+kinit admin
+ipa user-add replica1user --first=Replica1 --last=User --password
+
+# Create user on replica2
+ssh root@idm-replica2.example.com
+kinit admin
+ipa user-add replica2user --first=Replica2 --last=User --password
+Step 2: Verify Cross-Replication
+# Wait for replication (usually 1-2 minutes)
+sleep 120
+
+# Check if replica1user exists on replica2
+ssh root@idm-replica2.example.com
+kinit admin
+ipa user-show replica1user
+
+# Check if replica2user exists on replica1
+ssh root@idm-replica1.example.com
+kinit admin
+ipa user-show replica2user
+
+# Restart primary server and check data
+ssh root@idm-primary.example.com
+systemctl start ipa
+sleep 60
+kinit admin
+ipa user-show replica1user
+ipa user-show replica2user
+Subtask 3.4: Performance and Load Testing
+Step 1: Test Concurrent Operations
+# Create a script to test concurrent user creation
+cat > /tmp/load_test.sh << 'EOF'
+#!/bin/bash
+for i in {1..10}; do
+    ipa user-add loadtest$i --first=Load --last=Test$i --password &
+done
+wait
+echo "Load test completed"
+EOF
+
+chmod +x /tmp/load_test.sh
+
+# Run load test on different servers simultaneously
+ssh root@idm-replica1.example.com "/tmp/load_test.sh" &
+ssh root@idm-replica2.example.com "/tmp/load_test.sh" &
+wait
+Step 2: Monitor Replication Status
+# Check replication status
+ipa-replica-manage list -v
+
+# Monitor replication lag
+ipa-replica-manage list-ruv
+
+# Check for any replication conflicts
+find /var/lib/dirsrv/slapd-EXAMPLE-COM/ -name "*conflict*"
+Troubleshooting Common Issues
+Issue 1: Replication Not Working
+# Check replication agreements
+ipa-replica-manage list -v
+
+# Restart replication
+ipa-replica-manage re-initialize --from=idm-primary.example.com
+
+# Check logs
+tail -f /var/log/dirsrv/slapd-EXAMPLE-COM/errors
+Issue 2: DNS Resolution Problems
+# Verify DNS configuration
+ipa dnsconfig-show
+
+# Check DNS zones
+ipa dnszone-find
+
+# Test DNS resolution
+dig @localhost example.com SOA
+Issue 3: Certificate Issues
+# Check certificate status
+ipa-cacert-manage list
+
+# Renew certificates if needed
+ipa-cacert-manage renew
+
+# Check CA replication
+ipa-csreplica-manage list
+Validation and Testing
+Final Validation Steps
+Step 1: Comprehensive Topology Test
+# Create validation script
+cat > /tmp/validate_topology.sh << 'EOF'
+#!/bin/bash
+echo "=== IdM Distributed Topology Validation ==="
+
+echo "1. Checking all servers status..."
+for server in idm-primary.example.com idm-replica1.example.com idm-replica2.example.com; do
+    echo "Checking $server..."
+    ssh root@$server "systemctl is-active ipa" || echo "$server: FAILED"
+done
+
+echo "2. Testing authentication on all servers..."
+for server in idm-primary.example.com idm-replica1.example.com idm-replica2.example.com; do
+    echo "Testing auth on $server..."
+    ssh root@$server "echo 'RedHat123!' | kinit admin" || echo "$server auth: FAILED"
+done
+
+echo "3. Testing data consistency..."
+ssh root@idm-primary.example.com "ipa user-find --all | wc -l"
+ssh root@idm-replica1.example.com "ipa user-find --all | wc -l"
+ssh root@idm-replica2.example.com "ipa user-find --all | wc -l"
+
+echo "4. Testing DNS resolution..."
+for server in idm-primary.example.com idm-replica1.example.com idm-replica2.example.com; do
+    nslookup $server || echo "DNS resolution failed for $server"
+done
+
+echo "=== Validation Complete ==="
+EOF
+
+chmod +x /tmp/validate_topology.sh
+/tmp/validate_topology.sh
+Step 2: Document the Topology
+# Generate topology documentation
+ipa topologysegment-find domain > /tmp/domain_topology.txt
+ipa topologysegment-find ca > /tmp/ca_topology.txt
+ipa server-find > /tmp/server_list.txt
+
+echo "Topology documentation saved to /tmp/"
+Conclusion
+In this lab, you have successfully:
+
+Installed a geographically distributed IdM topology with three servers representing different geographic locations
+Configured proper replication between all IdM servers to ensure data consistency across the distributed environment
+Set up DNS services for the distributed topology with proper load balancing and failover capabilities
+Tested high availability scenarios including server failures, DNS failover, and authentication redundancy
+Validated data consistency across all replicas and verified that changes replicate properly
+Performed load testing to ensure the distributed topology can handle concurrent operations
+Why This Matters
+Geographically distributed IdM topologies are crucial for:
+
+Business Continuity: Ensuring identity services remain available even if one location experiences an outage
+Performance Optimization: Users can authenticate against the nearest IdM server, reducing latency
+Disaster Recovery: Multiple geographic locations provide natural disaster recovery capabilities
+Scalability: Distributed architecture can handle larger user bases and higher authentication loads
+Compliance: Many organizations require geographically distributed identity services for regulatory compliance
+Key Takeaways
+Proper planning is essential for distributed IdM deployments, including network connectivity and DNS design
+Replication topology should be designed to balance redundancy with network efficiency
+Regular monitoring of replication status and performance is crucial for maintaining a healthy distributed environment
+Testing failover scenarios regularly ensures the high availability features work when needed
+DNS configuration plays a critical role in the success of distributed IdM deployments
+This distributed IdM topology provides a robust, scalable, and highly available identity management solution suitable for enterprise environments with multiple geographic locations.
