@@ -1,0 +1,391 @@
+Lab 17: Disaster Recovery Planning for IdM
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the importance of disaster recovery planning for Identity Management systems
+Configure comprehensive backup strategies using ipa-backup command
+Successfully restore an IdM server from backup files
+Test and validate disaster recovery procedures to ensure business continuity
+Implement best practices for IdM backup and recovery operations
+Troubleshoot common issues during backup and restore processes
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Red Hat Identity Management (IdM) concepts
+Knowledge of system administration fundamentals
+Understanding of network services and DNS concepts
+Previous experience with IdM server installation and configuration
+Root or sudo access to the lab environment
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or install software.
+
+Your lab environment includes:
+
+Primary IdM server (idm-server.example.com)
+Secondary test server for restore operations
+Pre-configured network settings and DNS resolution
+All necessary IdM packages and dependencies
+Task 1: Configure Backup Strategies Using ipa-backup
+Subtask 1.1: Understanding IdM Backup Types
+Before implementing backup strategies, it's important to understand the different types of backups available in IdM:
+
+Full Backup: Contains all IdM data including:
+
+LDAP database
+Certificate Authority (CA) data
+Configuration files
+Logs and metadata
+Data-only Backup: Contains only the LDAP data without logs or temporary files
+
+Subtask 1.2: Prepare the Backup Environment
+First, let's prepare the system for backup operations:
+
+# Switch to root user
+sudo su -
+
+# Create a dedicated backup directory
+mkdir -p /var/lib/ipa/backup/manual
+chmod 700 /var/lib/ipa/backup/manual
+
+# Check available disk space
+df -h /var/lib/ipa/backup/
+
+# Verify IdM server status
+ipactl status
+Subtask 1.3: Perform a Full System Backup
+Execute a comprehensive full backup of the IdM server:
+
+# Create a full backup with timestamp
+ipa-backup --verbose --data --logs
+
+# Alternative: Create backup with custom location
+ipa-backup --verbose --data --logs --dir=/var/lib/ipa/backup/manual
+
+# Check the backup creation
+ls -la /var/lib/ipa/backup/
+The backup process will create a directory with timestamp containing all necessary files.
+
+Subtask 1.4: Create Data-Only Backup
+For faster backup operations, create a data-only backup:
+
+# Create data-only backup
+ipa-backup --data --verbose
+
+# Verify backup contents
+BACKUP_DIR=$(ls -t /var/lib/ipa/backup/ | head -1)
+ls -la /var/lib/ipa/backup/$BACKUP_DIR/
+Subtask 1.5: Implement Automated Backup Script
+Create an automated backup script for regular backup operations:
+
+# Create backup script
+cat > /usr/local/bin/idm-backup.sh << 'EOF'
+#!/bin/bash
+
+# IdM Automated Backup Script
+BACKUP_BASE="/var/lib/ipa/backup"
+LOG_FILE="/var/log/idm-backup.log"
+RETENTION_DAYS=30
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> $LOG_FILE
+}
+
+# Start backup process
+log_message "Starting IdM backup process"
+
+# Check if IdM is running
+if ! ipactl status > /dev/null 2>&1; then
+    log_message "ERROR: IdM services are not running"
+    exit 1
+fi
+
+# Perform backup
+if ipa-backup --data --logs --verbose >> $LOG_FILE 2>&1; then
+    log_message "Backup completed successfully"
+else
+    log_message "ERROR: Backup failed"
+    exit 1
+fi
+
+# Clean old backups
+find $BACKUP_BASE -type d -name "ipa-full-*" -mtime +$RETENTION_DAYS -exec rm -rf {} \; 2>/dev/null
+
+log_message "Backup process completed"
+EOF
+
+# Make script executable
+chmod +x /usr/local/bin/idm-backup.sh
+
+# Test the script
+/usr/local/bin/idm-backup.sh
+Subtask 1.6: Schedule Regular Backups
+Set up automated backups using cron:
+
+# Create cron job for daily backups
+cat > /etc/cron.d/idm-backup << 'EOF'
+# IdM Daily Backup
+0 2 * * * root /usr/local/bin/idm-backup.sh
+EOF
+
+# Verify cron job
+crontab -l
+cat /etc/cron.d/idm-backup
+Task 2: Restore IdM Server from Backup
+Subtask 2.1: Prepare for Restore Operation
+Before restoring, ensure the system is properly prepared:
+
+# Stop all IdM services
+ipactl stop
+
+# Verify all services are stopped
+ipactl status
+
+# Create a pre-restore backup (safety measure)
+cp -r /var/lib/ipa /var/lib/ipa.pre-restore.$(date +%Y%m%d)
+Subtask 2.2: Identify Available Backups
+List and examine available backup files:
+
+# List all available backups
+ls -la /var/lib/ipa/backup/
+
+# Get detailed information about the latest backup
+LATEST_BACKUP=$(ls -t /var/lib/ipa/backup/ | head -1)
+echo "Latest backup: $LATEST_BACKUP"
+
+# Examine backup contents
+ls -la /var/lib/ipa/backup/$LATEST_BACKUP/
+Subtask 2.3: Perform Full Restore Operation
+Execute the restore process using the most recent backup:
+
+# Restore from the latest backup
+ipa-restore --verbose /var/lib/ipa/backup/$LATEST_BACKUP
+
+# Alternative: Restore with specific options
+# ipa-restore --data --logs --verbose /var/lib/ipa/backup/$LATEST_BACKUP
+Subtask 2.4: Verify Restore Success
+After restoration, verify that all components are working correctly:
+
+# Start IdM services
+ipactl start
+
+# Check service status
+ipactl status
+
+# Verify LDAP connectivity
+ldapsearch -x -b "dc=example,dc=com" -s base
+
+# Test IdM functionality
+ipa user-find admin
+ipa host-find
+Subtask 2.5: Handle Restore Issues
+If the restore encounters problems, follow these troubleshooting steps:
+
+# Check IdM logs for errors
+tail -f /var/log/ipaserver-install.log
+
+# Verify directory server logs
+tail -f /var/log/dirsrv/slapd-EXAMPLE-COM/errors
+
+# Check certificate status
+ipa-cacert-manage list
+
+# Restart services if needed
+ipactl restart
+Task 3: Test Disaster Recovery Procedures
+Subtask 3.1: Create Test Scenario
+Simulate a disaster scenario to test recovery procedures:
+
+# Create test users and groups before disaster simulation
+ipa user-add testuser1 --first=Test --last=User1 --password
+ipa user-add testuser2 --first=Test --last=User2 --password
+ipa group-add testgroup --desc="Test group for DR testing"
+ipa group-add-member testgroup --users=testuser1,testuser2
+
+# Verify test objects exist
+ipa user-find testuser
+ipa group-show testgroup
+Subtask 3.2: Simulate System Failure
+Create a controlled failure scenario:
+
+# Create a backup before simulation
+ipa-backup --data --logs --verbose
+
+# Stop IdM services
+ipactl stop
+
+# Simulate data corruption (CAUTION: Only in test environment)
+mv /var/lib/dirsrv /var/lib/dirsrv.corrupted
+mv /var/lib/ipa /var/lib/ipa.corrupted
+
+# Attempt to start services (should fail)
+ipactl start
+ipactl status
+Subtask 3.3: Execute Recovery Procedures
+Follow the complete disaster recovery process:
+
+# Step 1: Restore directory structure
+mkdir -p /var/lib/dirsrv
+mkdir -p /var/lib/ipa
+
+# Step 2: Find the backup to restore
+RECOVERY_BACKUP=$(ls -t /var/lib/ipa/backup/ | head -1)
+echo "Using backup: $RECOVERY_BACKUP"
+
+# Step 3: Perform restoration
+ipa-restore --verbose /var/lib/ipa/backup/$RECOVERY_BACKUP
+
+# Step 4: Start services
+ipactl start
+
+# Step 5: Verify service status
+ipactl status
+Subtask 3.4: Validate Recovery Success
+Thoroughly test all IdM functionality after recovery:
+
+# Test authentication
+kinit admin
+
+# Verify test users still exist
+ipa user-find testuser
+ipa group-show testgroup
+
+# Test LDAP operations
+ldapsearch -x -b "dc=example,dc=com" "(uid=testuser1)"
+
+# Verify DNS functionality
+dig @localhost example.com
+
+# Test certificate operations
+ipa cert-find
+
+# Check replication status (if applicable)
+ipa-replica-manage list
+Subtask 3.5: Document Recovery Time
+Measure and document the recovery process:
+
+# Create recovery documentation
+cat > /root/disaster-recovery-test.log << EOF
+Disaster Recovery Test Results
+==============================
+Date: $(date)
+Backup Used: $RECOVERY_BACKUP
+Recovery Start Time: [Record manually]
+Recovery End Time: [Record manually]
+Total Recovery Time: [Calculate manually]
+
+Services Tested:
+- LDAP: [PASS/FAIL]
+- Kerberos: [PASS/FAIL]
+- DNS: [PASS/FAIL]
+- Certificate Authority: [PASS/FAIL]
+- Web UI: [PASS/FAIL]
+
+Test Objects Verified:
+- testuser1: [FOUND/MISSING]
+- testuser2: [FOUND/MISSING]
+- testgroup: [FOUND/MISSING]
+
+Notes:
+[Add any observations or issues encountered]
+EOF
+
+# Display the log template
+cat /root/disaster-recovery-test.log
+Subtask 3.6: Create Recovery Runbook
+Document the complete recovery procedure:
+
+# Create comprehensive recovery runbook
+cat > /root/idm-disaster-recovery-runbook.md << 'EOF'
+# IdM Disaster Recovery Runbook
+
+## Pre-Recovery Checklist
+- [ ] Identify the cause of the failure
+- [ ] Determine the most recent valid backup
+- [ ] Ensure sufficient disk space for restoration
+- [ ] Notify stakeholders of recovery process
+
+## Recovery Steps
+
+### 1. Stop All Services
+```bash
+ipactl stop
+2. Identify Backup
+ls -la /var/lib/ipa/backup/
+BACKUP_DIR=[SELECT_APPROPRIATE_BACKUP]
+3. Restore from Backup
+ipa-restore --verbose /var/lib/ipa/backup/$BACKUP_DIR
+4. Start Services
+ipactl start
+ipactl status
+5. Verification Tests
+Test LDAP connectivity
+Verify Kerberos authentication
+Check DNS resolution
+Validate certificate services
+Test web interface access
+Post-Recovery Tasks
+ Update monitoring systems
+ Notify users of service restoration
+ Review and update backup procedures
+ Document lessons learned
+Emergency Contacts
+System Administrator: [CONTACT_INFO]
+Network Team: [CONTACT_INFO]
+Management: [CONTACT_INFO] EOF
+echo "Recovery runbook created at /root/idm-disaster-recovery-runbook.md"
+
+
+## Troubleshooting Common Issues
+
+### Backup Issues
+
+**Problem**: Backup fails with permission errors
+```bash
+# Solution: Check and fix permissions
+chown -R dirsrv:dirsrv /var/lib/dirsrv
+chmod -R 755 /var/lib/ipa/backup
+Problem: Insufficient disk space for backup
+
+# Solution: Clean old backups and check space
+df -h /var/lib/ipa/backup/
+find /var/lib/ipa/backup -name "ipa-full-*" -mtime +7 -exec rm -rf {} \;
+Restore Issues
+Problem: Restore fails with database errors
+
+# Solution: Stop services and retry
+ipactl stop
+systemctl stop dirsrv@EXAMPLE-COM
+ipa-restore --verbose [BACKUP_PATH]
+Problem: Services won't start after restore
+
+# Solution: Check logs and restart individual services
+tail -f /var/log/ipaserver-install.log
+systemctl restart dirsrv@EXAMPLE-COM
+systemctl restart krb5kdc
+systemctl restart kadmin
+Best Practices
+Regular Testing: Test restore procedures monthly
+Multiple Backup Locations: Store backups on separate storage systems
+Documentation: Keep recovery procedures updated and accessible
+Monitoring: Implement backup success/failure monitoring
+Retention Policy: Maintain appropriate backup retention periods
+Security: Encrypt backup files and secure storage locations
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Implemented robust backup strategies using the ipa-backup command with both full and data-only options
+Created automated backup procedures with scheduling and retention policies
+Performed complete disaster recovery by restoring an IdM server from backup files
+Tested and validated recovery procedures through simulated disaster scenarios
+Documented recovery processes with detailed runbooks and troubleshooting guides
+Why This Matters: Disaster recovery planning is critical for maintaining business continuity in enterprise environments. IdM systems contain sensitive authentication and authorization data that organizations depend on for daily operations. Without proper backup and recovery procedures, a system failure could result in:
+
+Complete loss of user authentication capabilities
+Inability to access critical business applications
+Extended downtime affecting productivity and revenue
+Potential security vulnerabilities during emergency recovery
+The skills you've developed in this lab ensure that you can maintain high availability and quick recovery times for Identity Management systems, making you valuable in any enterprise IT environment. These procedures form the foundation of a robust disaster recovery strategy that protects organizations from data loss and extended service outages.
+
+Remember to regularly test these procedures in your production environments and keep your recovery documentation updated as your IdM infrastructure evolves.
