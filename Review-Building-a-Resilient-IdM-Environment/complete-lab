@@ -1,0 +1,421 @@
+Lab 20: Review: Building a Resilient IdM Environment
+Objectives
+By the end of this lab, you will be able to:
+
+Deploy a resilient Identity Management (IdM) environment with multiple replicas
+Configure and test replication between IdM servers
+Populate the IdM environment with users and groups
+Test user authentication and access across multiple replicas
+Verify failover functionality when primary servers become unavailable
+Understand the importance of redundancy in identity management systems
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with DNS concepts and configuration
+Knowledge of LDAP and Kerberos authentication principles
+Understanding of network connectivity and firewall concepts
+Experience with user and group management in Linux environments
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your pre-configured environment. No need to build your own virtual machines.
+
+Your lab environment includes:
+
+3 CentOS Stream 9 servers (idm-server1, idm-server2, idm-client1)
+Pre-configured network connectivity
+Required packages and dependencies
+Task 1: Deploy a Resilient IdM Environment with Multiple Replicas
+Subtask 1.1: Prepare the Environment
+First, let's verify our lab environment and prepare the systems for IdM deployment.
+
+Check system information and connectivity:
+# Check hostname and IP configuration
+hostnamectl
+ip addr show
+Update system packages:
+sudo dnf update -y
+Configure hostnames and DNS resolution:
+On idm-server1 (Primary Server):
+
+sudo hostnamectl set-hostname idm-server1.example.com
+echo "192.168.1.10 idm-server1.example.com idm-server1" | sudo tee -a /etc/hosts
+echo "192.168.1.11 idm-server2.example.com idm-server2" | sudo tee -a /etc/hosts
+echo "192.168.1.12 idm-client1.example.com idm-client1" | sudo tee -a /etc/hosts
+On idm-server2 (Replica Server):
+
+sudo hostnamectl set-hostname idm-server2.example.com
+echo "192.168.1.10 idm-server1.example.com idm-server1" | sudo tee -a /etc/hosts
+echo "192.168.1.11 idm-server2.example.com idm-server2" | sudo tee -a /etc/hosts
+echo "192.168.1.12 idm-client1.example.com idm-client1" | sudo tee -a /etc/hosts
+On idm-client1 (Client Machine):
+
+sudo hostnamectl set-hostname idm-client1.example.com
+echo "192.168.1.10 idm-server1.example.com idm-server1" | sudo tee -a /etc/hosts
+echo "192.168.1.11 idm-server2.example.com idm-server2" | sudo tee -a /etc/hosts
+echo "192.168.1.12 idm-client1.example.com idm-client1" | sudo tee -a /etc/hosts
+Subtask 1.2: Install FreeIPA Server Packages
+On both idm-server1 and idm-server2:
+
+# Install FreeIPA server packages
+sudo dnf install -y freeipa-server freeipa-server-dns
+
+# Install additional tools for management
+sudo dnf install -y bind-utils
+Subtask 1.3: Configure the Primary IdM Server
+On idm-server1:
+
+Install and configure the primary IdM server:
+sudo ipa-server-install \
+  --realm=EXAMPLE.COM \
+  --domain=example.com \
+  --ds-password=SecurePassword123 \
+  --admin-password=AdminPassword123 \
+  --hostname=idm-server1.example.com \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --unattended
+Wait for installation to complete (this may take 10-15 minutes):
+# Check installation status
+sudo systemctl status ipa
+Obtain Kerberos ticket for admin user:
+kinit admin
+# Enter password: AdminPassword123
+Verify the installation:
+# Check IPA status
+ipa user-show admin
+
+# Verify DNS resolution
+nslookup idm-server1.example.com
+Subtask 1.4: Configure the Replica Server
+On idm-server2:
+
+Install FreeIPA client first:
+sudo ipa-client-install \
+  --domain=example.com \
+  --server=idm-server1.example.com \
+  --realm=EXAMPLE.COM \
+  --principal=admin \
+  --password=AdminPassword123 \
+  --hostname=idm-server2.example.com \
+  --unattended
+Promote client to replica server:
+sudo ipa-replica-install \
+  --setup-dns \
+  --forwarder=8.8.8.8 \
+  --forwarder=8.8.4.4 \
+  --unattended
+Verify replica installation:
+# Obtain Kerberos ticket
+kinit admin
+# Enter password: AdminPassword123
+
+# Check replica status
+ipa server-show idm-server2.example.com
+Subtask 1.5: Configure the IdM Client
+On idm-client1:
+
+Install FreeIPA client packages:
+sudo dnf install -y freeipa-client
+Join the client to the IdM domain:
+sudo ipa-client-install \
+  --domain=example.com \
+  --server=idm-server1.example.com \
+  --server=idm-server2.example.com \
+  --realm=EXAMPLE.COM \
+  --principal=admin \
+  --password=AdminPassword123 \
+  --hostname=idm-client1.example.com \
+  --unattended
+Verify client installation:
+# Test Kerberos authentication
+kinit admin
+# Enter password: AdminPassword123
+
+# Verify client can communicate with servers
+ipa user-show admin
+Task 2: Populate the Environment with Users and Groups
+Subtask 2.1: Create Organizational Units and Groups
+On idm-server1 (or any server with admin access):
+
+Create groups for different departments:
+# Obtain admin credentials
+kinit admin
+
+# Create IT department group
+ipa group-add it-department --desc="IT Department Staff"
+
+# Create HR department group
+ipa group-add hr-department --desc="Human Resources Department"
+
+# Create Finance department group
+ipa group-add finance-department --desc="Finance Department Staff"
+
+# Create managers group
+ipa group-add managers --desc="Department Managers"
+
+# Verify groups were created
+ipa group-find
+Subtask 2.2: Create User Accounts
+Create IT department users:
+# Create IT users
+ipa user-add jsmith \
+  --first=John \
+  --last=Smith \
+  --email=jsmith@example.com \
+  --password
+
+ipa user-add mjohnson \
+  --first=Mary \
+  --last=Johnson \
+  --email=mjohnson@example.com \
+  --password
+
+# Add users to IT department group
+ipa group-add-member it-department --users=jsmith,mjohnson
+Create HR department users:
+# Create HR users
+ipa user-add bwilson \
+  --first=Bob \
+  --last=Wilson \
+  --email=bwilson@example.com \
+  --password
+
+ipa user-add sdavis \
+  --first=Sarah \
+  --last=Davis \
+  --email=sdavis@example.com \
+  --password
+
+# Add users to HR department group
+ipa group-add-member hr-department --users=bwilson,sdavis
+Create Finance department users:
+# Create Finance users
+ipa user-add rgarcia \
+  --first=Robert \
+  --last=Garcia \
+  --email=rgarcia@example.com \
+  --password
+
+# Add user to Finance department group
+ipa group-add-member finance-department --users=rgarcia
+
+# Make Robert a manager
+ipa group-add-member managers --users=rgarcia
+Subtask 2.3: Configure Password Policies
+Create custom password policy for managers:
+# Create password policy for managers
+ipa pwpolicy-add managers \
+  --minlength=12 \
+  --minclasses=3 \
+  --maxlife=60 \
+  --history=5
+
+# Verify password policies
+ipa pwpolicy-find
+Subtask 2.4: Create Host-Based Access Control (HBAC) Rules
+Create HBAC rules for different access levels:
+# Create HBAC rule for IT department
+ipa hbacrule-add it-server-access \
+  --desc="Allow IT department access to servers"
+
+# Add IT group to the rule
+ipa hbacrule-add-user it-server-access --groups=it-department
+
+# Create HBAC rule for managers
+ipa hbacrule-add manager-access \
+  --desc="Allow managers access to all systems"
+
+# Add managers group to the rule
+ipa hbacrule-add-user manager-access --groups=managers
+
+# Verify HBAC rules
+ipa hbacrule-find
+Task 3: Test User Access, Replication, and Failover Functionality
+Subtask 3.1: Test User Authentication
+Test user authentication on the client machine:
+On idm-client1:
+
+# Test authentication for different users
+kinit jsmith
+# Enter the password you set for jsmith
+
+# Verify ticket
+klist
+
+# Test another user
+kinit bwilson
+# Enter the password you set for bwilson
+
+# Verify ticket
+klist
+Test SSH access with IdM users:
+# Enable SSH access for IdM users
+sudo authselect select sssd with-mkhomedir --force
+
+# Test SSH login (from another terminal or session)
+ssh jsmith@idm-client1.example.com
+Subtask 3.2: Test Replication Between Servers
+Create a user on the primary server and verify replication:
+On idm-server1:
+
+# Create a test user
+kinit admin
+ipa user-add testuser \
+  --first=Test \
+  --last=User \
+  --email=testuser@example.com \
+  --password
+Verify the user exists on the replica server:
+On idm-server2:
+
+# Check if user replicated
+kinit admin
+ipa user-show testuser
+
+# Check replication status
+ipa-replica-manage list
+ipa-replica-manage list-ruv
+Test bidirectional replication:
+On idm-server2:
+
+# Create a user on replica
+ipa user-add replica-user \
+  --first=Replica \
+  --last=User \
+  --email=replica-user@example.com \
+  --password
+On idm-server1:
+
+# Verify user replicated back
+ipa user-show replica-user
+Subtask 3.3: Test Failover Functionality
+Test client failover when primary server is unavailable:
+On idm-server1:
+
+# Simulate server failure by stopping services
+sudo systemctl stop ipa
+Test authentication on client during failover:
+On idm-client1:
+
+# Clear existing tickets
+kdestroy
+
+# Test authentication (should failover to replica)
+kinit jsmith
+# This should work using idm-server2
+
+# Verify which server is being used
+ipa user-show jsmith
+Monitor failover in logs:
+# Check SSSD logs for failover
+sudo tail -f /var/log/sssd/sssd_example.com.log
+Subtask 3.4: Test Service Recovery
+Restart the primary server and test recovery:
+On idm-server1:
+
+# Restart IPA services
+sudo systemctl start ipa
+sudo systemctl status ipa
+Verify replication resumes:
+# Check replication agreements
+kinit admin
+ipa-replica-manage list
+ipa topologysegment-find domain
+Subtask 3.5: Performance and Load Testing
+Create multiple users for load testing:
+# Script to create multiple test users
+for i in {1..10}; do
+  ipa user-add testuser$i \
+    --first=Test$i \
+    --last=User$i \
+    --email=testuser$i@example.com \
+    --password
+done
+Test concurrent authentication:
+On idm-client1:
+
+# Create a simple load test script
+cat > load_test.sh << 'EOF'
+#!/bin/bash
+for i in {1..5}; do
+  (
+    echo "Testing user testuser$i"
+    kinit testuser$i << EOL
+TestPassword123
+EOL
+    klist
+    kdestroy
+  ) &
+done
+wait
+EOF
+
+chmod +x load_test.sh
+./load_test.sh
+Troubleshooting Tips
+Common Issues and Solutions
+DNS Resolution Problems:
+# Check DNS configuration
+nslookup idm-server1.example.com
+dig @idm-server1.example.com example.com
+
+# Fix DNS if needed
+sudo systemctl restart named
+Replication Issues:
+# Check replication status
+ipa-replica-manage list
+ipa-replica-manage list-ruv
+
+# Force replication
+ipa-replica-manage force-sync --from idm-server1.example.com
+Authentication Failures:
+# Check SSSD status
+sudo systemctl status sssd
+sudo sss_cache -E
+
+# Check Kerberos configuration
+klist -k /etc/krb5.keytab
+Service Startup Issues:
+# Check IPA service status
+sudo ipactl status
+
+# Restart all IPA services
+sudo ipactl restart
+Verification Commands
+Use these commands to verify your environment is working correctly:
+
+# Check server status
+ipa server-find
+
+# Verify replication topology
+ipa topologysegment-find domain
+
+# Check user and group information
+ipa user-find
+ipa group-find
+
+# Test DNS resolution
+nslookup _ldap._tcp.example.com
+
+# Verify certificates
+ipa cert-find
+
+# Check HBAC rules
+ipa hbacrule-find --all
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Deployed a resilient IdM environment with a primary server and replica, ensuring high availability for identity management services
+Configured replication between multiple IdM servers, providing redundancy and load distribution
+Populated the environment with realistic organizational structure including users, groups, and access policies
+Tested authentication and authorization across multiple servers and clients
+Verified failover functionality ensuring business continuity when primary services become unavailable
+Implemented security policies including password policies and host-based access controls
+This resilient IdM environment demonstrates enterprise-level identity management capabilities that are crucial for:
+
+Business Continuity: Services remain available even when individual servers fail
+Scalability: Multiple replicas can handle increased authentication loads
+Security: Centralized identity management with consistent policy enforcement
+Compliance: Audit trails and access controls meet regulatory requirements
+The skills you've developed in this lab are directly applicable to real-world enterprise environments where identity management resilience is critical for organizational operations. Understanding how to build, test, and maintain such systems is essential for system administrators and security professionals working with Red Hat Identity Management solutions.
