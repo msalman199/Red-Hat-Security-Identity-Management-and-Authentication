@@ -1,0 +1,395 @@
+Lab 19: Configuring IdM DNS Failover
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the importance of DNS failover in Identity Management environments
+Configure DNS failover settings within Red Hat Identity Management (IdM)
+Implement high availability DNS services for authentication and resource access
+Test DNS failover scenarios by simulating server failures
+Verify continued authentication and resource access during DNS outages
+Troubleshoot common DNS failover issues in IdM environments
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of DNS concepts and terminology
+Familiarity with Red Hat Identity Management (IdM) fundamentals
+Knowledge of Linux command-line operations
+Understanding of network troubleshooting concepts
+Experience with systemctl and service management
+Basic knowledge of LDAP and Kerberos authentication
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure complex networking.
+
+Your lab environment includes:
+
+idm-server1: Primary IdM server with integrated DNS (192.168.1.10)
+idm-server2: Secondary IdM server for failover (192.168.1.11)
+client1: IdM client machine for testing (192.168.1.20)
+client2: Additional client for verification (192.168.1.21)
+Task 1: Configure DNS Failover Settings in IdM
+Subtask 1.1: Verify Current IdM DNS Configuration
+First, let's examine the current DNS configuration on both IdM servers.
+
+Connect to the primary IdM server (idm-server1):
+# Check IdM server status
+sudo ipactl status
+
+# Verify DNS service is running
+sudo systemctl status named-pkcs11
+
+# Check current DNS configuration
+sudo ipa dnsconfig-show
+Examine DNS zones and records:
+# List all DNS zones
+sudo ipa dnszone-find
+
+# Check the main domain zone (replace example.com with your domain)
+sudo ipa dnsrecord-find example.com
+
+# Verify SRV records for IdM services
+sudo ipa dnsrecord-find example.com --name _ldap._tcp
+sudo ipa dnsrecord-find example.com --name _kerberos._tcp
+Document current DNS forwarders:
+# Check current DNS forwarders
+sudo ipa dnsconfig-show | grep -i forwarder
+
+# Verify DNS resolution is working
+nslookup google.com
+dig @localhost example.com
+Subtask 1.2: Configure Secondary IdM Server for DNS Failover
+Connect to the secondary IdM server (idm-server2):
+# Verify IdM replica status
+sudo ipactl status
+
+# Check if DNS is enabled on this replica
+sudo ipa config-show | grep -i dns
+Enable DNS on the secondary server if not already enabled:
+# Install DNS on the replica (if needed)
+sudo ipa-dns-install --forwarder=8.8.8.8 --forwarder=8.8.4.4 --no-reverse
+
+# Restart IdM services
+sudo ipactl restart
+Verify DNS replication between servers:
+# Check DNS zone replication
+sudo ipa dnszone-find
+
+# Verify SRV records are replicated
+sudo ipa dnsrecord-find example.com --name _ldap._tcp
+Subtask 1.3: Configure DNS Failover Settings
+Set up DNS forwarders on both servers:
+# On idm-server1, configure primary forwarders
+sudo ipa dnsconfig-mod --forwarder=8.8.8.8 --forwarder=8.8.4.4
+
+# Verify forwarder configuration
+sudo ipa dnsconfig-show
+Configure DNS recursion and caching settings:
+# Enable recursion for better failover performance
+sudo ipa dnsconfig-mod --allow-recursion=yes
+
+# Configure cache settings for improved performance
+sudo ipa dnsconfig-mod --cache-size=100M
+Set up DNS load balancing for IdM services:
+# Add multiple A records for load balancing
+sudo ipa dnsrecord-add example.com idm --a-rec=192.168.1.10
+sudo ipa dnsrecord-add example.com idm --a-rec=192.168.1.11
+
+# Verify the records
+sudo ipa dnsrecord-show example.com idm
+Subtask 1.4: Configure Client DNS Settings for Failover
+Connect to client1 and configure DNS failover:
+# Backup current resolv.conf
+sudo cp /etc/resolv.conf /etc/resolv.conf.backup
+
+# Configure multiple nameservers for failover
+sudo tee /etc/resolv.conf << EOF
+search example.com
+nameserver 192.168.1.10
+nameserver 192.168.1.11
+nameserver 8.8.8.8
+options timeout:2
+options attempts:3
+EOF
+Test DNS resolution from client:
+# Test resolution of IdM services
+nslookup _ldap._tcp.example.com
+nslookup _kerberos._tcp.example.com
+
+# Test resolution with specific nameservers
+nslookup example.com 192.168.1.10
+nslookup example.com 192.168.1.11
+Task 2: Test DNS Failover by Simulating DNS Server Failure
+Subtask 2.1: Establish Baseline Connectivity
+From client1, test normal DNS operations:
+# Test DNS resolution
+dig @192.168.1.10 example.com
+dig @192.168.1.11 example.com
+
+# Test IdM authentication
+kinit admin
+klist
+
+# Test LDAP connectivity
+ldapsearch -x -H ldap://idm-server1.example.com -b "dc=example,dc=com" "(objectclass=*)" dn
+Monitor DNS query performance:
+# Create a script to monitor DNS response times
+cat > /tmp/dns_monitor.sh << 'EOF'
+#!/bin/bash
+while true; do
+    echo "$(date): Testing DNS resolution..."
+    time nslookup example.com 192.168.1.10
+    time nslookup example.com 192.168.1.11
+    echo "---"
+    sleep 5
+done
+EOF
+
+chmod +x /tmp/dns_monitor.sh
+Subtask 2.2: Simulate Primary DNS Server Failure
+On idm-server1, simulate DNS service failure:
+# Stop the DNS service on primary server
+sudo systemctl stop named-pkcs11
+
+# Verify the service is stopped
+sudo systemctl status named-pkcs11
+
+# Check if other IdM services are still running
+sudo ipactl status
+From client1, test DNS failover:
+# Start the monitoring script in background
+/tmp/dns_monitor.sh &
+MONITOR_PID=$!
+
+# Test DNS resolution (should failover to secondary)
+nslookup example.com
+
+# Test specific queries
+dig @192.168.1.10 example.com  # Should fail
+dig @192.168.1.11 example.com  # Should succeed
+
+# Stop monitoring after 30 seconds
+sleep 30
+kill $MONITOR_PID
+Verify failover behavior:
+# Check DNS resolution times
+time nslookup _ldap._tcp.example.com
+time nslookup _kerberos._tcp.example.com
+
+# Test authentication still works
+kinit admin
+klist
+Subtask 2.3: Simulate Complete Server Failure
+On idm-server1, simulate complete server failure:
+# Stop all IdM services
+sudo ipactl stop
+
+# Verify all services are stopped
+sudo ipactl status
+From client1, test complete failover:
+# Test DNS resolution
+nslookup example.com
+
+# Test authentication failover
+kdestroy
+kinit admin
+
+# Test LDAP operations
+ldapsearch -x -H ldap://idm-server2.example.com -b "dc=example,dc=com" "(objectclass=posixAccount)" uid
+Monitor failover performance:
+# Create comprehensive failover test
+cat > /tmp/failover_test.sh << 'EOF'
+#!/bin/bash
+echo "Testing DNS failover scenarios..."
+
+echo "1. Testing DNS resolution:"
+nslookup example.com
+
+echo "2. Testing SRV record resolution:"
+nslookup _ldap._tcp.example.com
+
+echo "3. Testing authentication:"
+echo "password" | kinit admin
+
+echo "4. Testing LDAP search:"
+ldapsearch -x -H ldap://example.com -b "dc=example,dc=com" "(uid=admin)" dn
+
+echo "Failover test completed."
+EOF
+
+chmod +x /tmp/failover_test.sh
+/tmp/failover_test.sh
+Task 3: Verify Continued Authentication and Resource Access
+Subtask 3.1: Test User Authentication During Failover
+Create test users for failover testing:
+# On idm-server2 (the running server), create test users
+sudo ipa user-add testuser1 --first=Test --last=User1 --password
+
+# Set password for test user
+echo "TempPass123!" | sudo ipa passwd testuser1
+From client1, test user authentication:
+# Test authentication with new user
+kinit testuser1
+# Enter password when prompted
+
+# Verify ticket was obtained
+klist
+
+# Test password change (requires authentication)
+kpasswd testuser1
+Test group membership and access:
+# Check user's group memberships
+id testuser1
+
+# Test group operations
+sudo ipa group-add testgroup --desc="Test group for failover"
+sudo ipa group-add-member testgroup --users=testuser1
+
+# Verify group membership
+sudo ipa user-show testuser1 --all
+Subtask 3.2: Test Service Access During Failover
+Test SSH access with IdM authentication:
+# From client2, test SSH to client1 using IdM credentials
+ssh testuser1@client1.example.com
+
+# Verify home directory creation and access
+ls -la /home/testuser1
+Test sudo access (if configured):
+# Add sudo rule for testing
+sudo ipa sudorule-add testrule --desc="Test sudo rule"
+sudo ipa sudorule-add-user testrule --users=testuser1
+sudo ipa sudorule-add-host testrule --hosts=client1.example.com
+sudo ipa sudorule-mod testrule --cmdcat=all
+
+# Test sudo access
+sudo -u testuser1 sudo whoami
+Test web UI access:
+# Test web interface connectivity
+curl -k https://idm-server2.example.com/ipa/ui/
+
+# Test API access
+curl -k -H "Accept: application/json" https://idm-server2.example.com/ipa/json
+Subtask 3.3: Verify DNS Service Continuity
+Test DNS queries for all IdM services:
+# Create comprehensive DNS test script
+cat > /tmp/dns_service_test.sh << 'EOF'
+#!/bin/bash
+echo "Testing DNS service continuity..."
+
+services=("_ldap._tcp" "_kerberos._tcp" "_kerberos-master._tcp" "_kpasswd._tcp" "_ntp._tcp")
+
+for service in "${services[@]}"; do
+    echo "Testing $service.example.com:"
+    nslookup $service.example.com
+    echo "---"
+done
+
+echo "Testing reverse DNS:"
+nslookup 192.168.1.11
+
+echo "Testing external DNS resolution:"
+nslookup google.com
+
+echo "DNS service test completed."
+EOF
+
+chmod +x /tmp/dns_service_test.sh
+/tmp/dns_service_test.sh
+Monitor DNS performance during failover:
+# Test DNS response times
+for i in {1..10}; do
+    echo "Test $i:"
+    time nslookup example.com
+    sleep 2
+done
+Verify DNS zone transfers and replication:
+# On idm-server2, check zone transfer logs
+sudo journalctl -u named-pkcs11 -f &
+
+# From client1, perform DNS operations that trigger replication
+sudo ipa dnsrecord-add example.com testrecord --a-rec=192.168.1.100
+
+# Verify record was added
+nslookup testrecord.example.com
+Subtask 3.4: Test Recovery and Failback
+Restore primary server (idm-server1):
+# On idm-server1, restart IdM services
+sudo ipactl start
+
+# Verify all services are running
+sudo ipactl status
+
+# Check DNS service specifically
+sudo systemctl status named-pkcs11
+Test failback behavior:
+# From client1, test DNS resolution returns to primary
+nslookup example.com
+
+# Monitor which server responds
+dig +short example.com @192.168.1.10
+dig +short example.com @192.168.1.11
+Verify data consistency after recovery:
+# Check that test records exist on both servers
+sudo ipa dnsrecord-show example.com testrecord
+
+# Verify user accounts are synchronized
+sudo ipa user-show testuser1
+
+# Test authentication against both servers
+kinit -S krbtgt/EXAMPLE.COM@EXAMPLE.COM testuser1
+Troubleshooting Common Issues
+DNS Resolution Problems
+If DNS resolution fails during testing:
+
+# Check DNS service status
+sudo systemctl status named-pkcs11
+
+# Verify DNS configuration
+sudo named-checkconf /etc/named.conf
+
+# Check DNS logs
+sudo journalctl -u named-pkcs11 -n 50
+
+# Test DNS manually
+dig @localhost example.com
+Authentication Failures
+If authentication fails during failover:
+
+# Check Kerberos configuration
+cat /etc/krb5.conf
+
+# Verify KDC connectivity
+kinit -V admin
+
+# Check time synchronization
+chrony sources -v
+
+# Test LDAP connectivity
+ldapsearch -x -H ldap://idm-server2.example.com -b "dc=example,dc=com" "(uid=admin)"
+Replication Issues
+If data is not synchronized between servers:
+
+# Check replication status
+sudo ipa-replica-manage list
+sudo ipa-replica-manage list-ruv
+
+# Force replication
+sudo ipa-replica-manage force-sync --from idm-server1.example.com
+
+# Check replication agreements
+sudo ipa-replica-manage list -v idm-server2.example.com
+Conclusion
+In this lab, you have successfully:
+
+Configured DNS failover in a Red Hat Identity Management environment, ensuring high availability for critical authentication services
+Implemented redundant DNS services across multiple IdM servers to prevent single points of failure
+Tested failover scenarios by simulating various types of server failures and verifying automatic failover behavior
+Verified continued authentication and resource access during DNS outages, demonstrating the resilience of your IdM infrastructure
+Monitored DNS performance and response times during failover events to ensure acceptable service levels
+Why This Matters: DNS failover is crucial for enterprise identity management because DNS provides the foundation for service discovery in IdM environments. When users authenticate or applications access resources, they rely on DNS to locate the appropriate IdM servers. Without proper DNS failover:
+
+User authentication could fail during server outages
+Applications might lose access to directory services
+Service discovery for LDAP, Kerberos, and other IdM services could be disrupted
+Business continuity could be severely impacted
+By implementing DNS failover, you ensure that your identity management infrastructure remains available even when individual servers fail, providing seamless authentication and authorization services to users and applications. This lab has given you practical experience with the tools and techniques needed to build resilient, highly available identity management systems in enterprise environments.
+
+The skills you've developed here are directly applicable to Red Hat Identity Management deployments and are essential for maintaining robust authentication infrastructure in production environments.
